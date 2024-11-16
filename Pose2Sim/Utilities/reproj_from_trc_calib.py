@@ -33,7 +33,7 @@ import toml
 import cv2
 import json
 import re
-from anytree import Node, RenderTree
+import hashlib
 from copy import deepcopy
 import argparse
 
@@ -56,11 +56,15 @@ biocvplus_markers = ['ACROM_R', 'ACROM_L', 'C7', 'T10', 'CLAV', 'XIP_PROC', 'UA_
 
 
 ## FUNCTIONS
-def str_to_id(string):
+def str_to_id(string, length=8):
     '''
     Convert a string to an integer id
     '''
-    return ''.join([str(abs(ord(char) - 96)) for char in string])
+
+    # return ''.join([str(abs(ord(char) - 96)) for char in string])
+
+    hash_int = int(hashlib.md5(string.encode()).hexdigest(), 16) 
+    return hash_int % (10 ** length)  # Trim to desired length
 
 
 def computeP(calib_file, undistort=False):
@@ -283,7 +287,7 @@ def dataset_to_mmpose2d(coords_df, mmpose_json_file, img_size, markerset='custom
 
     # transform first name in integer, and append other numbers from persons
     persons = list(set(['_'.join(item.split('_')[:5]) for item in coords_df.columns.levels[1]]))
-    person_ids = [str_to_id(p.split('_')[1]) + ''.join(p.split('_')[3:]) if len(p.split('_'))>=3 
+    person_ids = [int(str(str_to_id(p.split('_')[1])) + ''.join(p.split('_')[3:])) if len(p.split('_'))>=3 
                   else str_to_id(p.split('_')[0]) 
                   for p in persons]
     
@@ -305,11 +309,12 @@ def dataset_to_mmpose2d(coords_df, mmpose_json_file, img_size, markerset='custom
         file_name = coords_df.index[i]
         w, h = img_size
         # id from concatenation of numbers from path
-        file_id = ''.join(re.findall(r'\d+', str(file_name)))
+        # file_id = int(''.join(re.findall(r'\d+', str(file_name))))
+        file_id = int(hashlib.md5(file_name.encode()).hexdigest(), 16) % (10**12)  # Keep only 12 digits
 
         labels2d_json_data['images'] += [{'file_name': file_name, 
-                                            'height': str(h), 
-                                            'width': str(w), 
+                                            'height': h, 
+                                            'width': w, 
                                             'id': file_id, 
                                             'license': 1}]
         
@@ -321,35 +326,35 @@ def dataset_to_mmpose2d(coords_df, mmpose_json_file, img_size, markerset='custom
             for marker in marker_list:
                 # visibility: 2 visible, 1 occluded, 0 out of frame
                 coords_mk = coords.loc[coords.index.get_level_values(2)==marker]
-                coords_list += [0.0, 0.0, 0] if np.isnan(coords_mk).any() else coords_mk.tolist()+[2]
+                coords_list += coords_mk.tolist()+[2] if not np.isnan(coords_mk).any() else [0.0, 0.0, 0]
             
-            # bbox
-            min_x = np.nanmin(coords.loc[coords.index.get_level_values(3)=='x'])
-            min_y = np.nanmin(coords.loc[coords.index.get_level_values(3)=='y'])
-            max_x = np.nanmax(coords.loc[coords.index.get_level_values(3)=='x'])
-            max_y = np.nanmax(coords.loc[coords.index.get_level_values(3)=='y'])
-            bbox = [min_x, min_y, max_x, max_y]
-            # bbox_width = max_x - min_x
-            # bbox_height = max_y - min_y
-            # bbox = [min_x, min_y, bbox_width, bbox_height]
-
-            # num_keypoints, id, category_id
             num_keypoints = len(marker_list)
-            id = person_ids[p]
+
+            # bbox
+            x_coords = coords.loc[coords.index.get_level_values(3)=='x']
+            y_coords = coords.loc[coords.index.get_level_values(3)=='y']
+            min_x, min_y, max_x, max_y = np.nanmin(x_coords), np.nanmin(y_coords), np.nanmax(x_coords), np.nanmax(y_coords)
+            bbox_width = np.round(max_x - min_x, decimals=1)
+            bbox_height = np.round(max_y - min_y, decimals=1)
+            # bbox = [min_x, min_y, max_x, max_y]
+            bbox = [min_x, min_y, bbox_width, bbox_height] # coco format
+
+            person_id = person_ids[p]
             category_id = 1
-            # segmentation and area not filled, and each annotation represents one single person
-            segmentation = []
-            area = 0
-            iscrowd = 0 # 1 if len(persons)>1 else 0
-            labels2d_json_data['annotations'] += [{ 'keypoints': coords_list, 
-                                                    'num_keypoints': num_keypoints, 
-                                                    'bbox': bbox, 
-                                                    'id': id, 
-                                                    'image_id': file_id, 
-                                                    'category_id': category_id, 
-                                                    'segmentation': segmentation, 
-                                                    'area': area, 
-                                                    'iscrowd': iscrowd}]
+            segmentation = [[min_x, min_y, min_x, max_y, max_x, max_y, max_x, min_y]] # no segmentation
+            area = np.round(bbox_width * bbox_height, decimals=1)
+            iscrowd = 0 # each annotation represents one single person
+            
+            if not np.isnan(bbox).any():
+                labels2d_json_data['annotations'] += [{ 'keypoints': coords_list, 
+                                                        'num_keypoints': num_keypoints, 
+                                                        'bbox': bbox, 
+                                                        'id': person_id, 
+                                                        'image_id': file_id, 
+                                                        'category_id': category_id,
+                                                        'segmentation': segmentation,
+                                                        'area': area,
+                                                        'iscrowd': iscrowd}]
     
     with open(mmpose_json_file, 'w') as f:
         json.dump(labels2d_json_data, f)
@@ -418,7 +423,7 @@ def reproj_from_trc_calib_func(**args):
     num_frames = [len(data_trc) if P_all.shape[1]==1 else min(P_all.shape[1], len(data_trc))][0]
     columns_iterables = [['DavidPagnon'], ['person0'], bodyparts, ['x','y']]
     columns_h5 = pd.MultiIndex.from_product(columns_iterables, names=['scorer', 'individuals', 'bodyparts', 'coords'])
-    rows_iterables = [[os.path.join(os.path.splitext(input_trc_file)[0],f'img_{i:03d}.png') for i in range(num_frames)]]
+    rows_iterables = [[os.path.join(os.path.splitext(input_trc_file)[0],f'img_{i:03d}.jpg') for i in range(num_frames)]]
     rows_h5 = pd.MultiIndex.from_product(rows_iterables)
     data_h5 = pd.DataFrame(np.nan, index=rows_h5, columns=columns_h5)
 
@@ -436,14 +441,18 @@ def reproj_from_trc_calib_func(**args):
                 y_all = [coords_2D_all[i][0,0,1] for i in range(len(P_all_frame))]
             else:
                 x_all, y_all = reprojection(P_all_frame, q)
+            # Store with one single decimal
+            x_all = np.round(np.array(x_all), decimals=1)
+            y_all = np.round(np.array(y_all), decimals=1)
+
             [coords[cam].extend([x_all[cam], y_all[cam]]) for cam in range(len(P_all_frame))]
         for cam in range(len(P_all_frame)):
             data_proj[cam].iloc[frame,:] = coords[cam]
     
     # Replace by nan when reprojection out of image
     for cam in range(len(P_all_frame)):
-        x_valid = data_proj[cam].iloc[:,::2] < calib_params_size[cam][0]
-        y_valid = data_proj[cam].iloc[:,1::2] < calib_params_size[cam][1]
+        x_valid = (data_proj[cam].iloc[:, ::2] >= 0) & (data_proj[cam].iloc[:, ::2] < calib_params_size[cam][0])
+        y_valid = (data_proj[cam].iloc[:, 1::2] >= 0) & (data_proj[cam].iloc[:, 1::2] < calib_params_size[cam][1])
         data_proj[cam].iloc[:, ::2] = data_proj[cam].iloc[:, ::2].where(x_valid, np.nan)
         data_proj[cam].iloc[:, ::2] = np.where(y_valid==False, np.nan, data_proj[cam].iloc[:, ::2])
         data_proj[cam].iloc[:, 1::2] = data_proj[cam].iloc[:, 1::2].where(y_valid, np.nan)

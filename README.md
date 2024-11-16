@@ -60,9 +60,9 @@ Pose2Sim stands for "OpenPose to OpenSim", as it originally used *OpenPose* inpu
 - [x] **v0.8** *(04/2024)*: New synchronization tool
 - [x] **v0.9** *(07/2024)*: Integration of pose estimation in the pipeline
 - [x] **v0.10 *(09/2024)*: Integration of OpenSim in the pipeline**
-- [ ] v0.11: Migrated documentation to new github.io website
-- [ ] v0.12: Calibration based on keypoint detection, Handling left/right swaps, Correcting lens distortions
+- [ ] v0.11: Integration of Sports2D, and documentation on new website
 - [ ] v0.13: Graphical User Interface
+- [ ] v0.12: Calibration based on keypoint detection, Handling left/right swaps, Correcting lens distortions
 - [ ] v1.0: First full release
 
 ***N.B.:*** As always, I am more than happy to welcome contributors (see [How to contribute](#how-to-contribute)).
@@ -152,6 +152,7 @@ If you don't use Anaconda, type `python -V` in terminal to make sure python>=3.9
 
    Finally, install ONNX Runtime with GPU support:
    ```
+   pip uninstall onnxruntime
    pip install onnxruntime-gpu
    ```
 
@@ -273,7 +274,7 @@ You can visualize your results with Blender as explained in [Demonstration Part-
 <br>
 
 ***N.B.:***
-- In Config.toml, set `project` > `multi_person = true` for each trial that contains multiple persons.
+- In [Config.toml](https://github.com/perfanalytics/pose2sim/blob/main/Pose2Sim/Demo_SinglePerson/Config.toml), set `project` > `multi_person = true` for each trial that contains multiple persons.
 - Make sure that the order of `markerAugmentation` > `participant_height` and `participant_mass` matches the person's IDs.
 
 <br/>
@@ -452,7 +453,8 @@ Output file:
 
 ### Convert from Caliscope, AniPose, FreeMocap, Qualisys, Optitrack, Vicon, OpenCap, EasyMocap, or bioCV
 
-If you already have a calibration file, set `calibration_type` type to `convert` in your [Config.toml](https://github.com/perfanalytics/pose2sim/blob/main/Pose2Sim/Empty_project/User/Config.toml) file.
+If you already have a calibration file, set `calibration_type` type to `convert` in your [Config.toml](https://github.com/perfanalytics/pose2sim/blob/main/Pose2Sim/Demo_SinglePerson/Config.toml) file.\
+***N.B.:** If the original calibration file does not provide any residual errors, they will be logged as NaN. This is not an error and can be ignored.*
 - **From [Caliscope](https://mprib.github.io/caliscope/), [AniPose](https://github.com/lambdaloop/anipose) or [FreeMocap](https://github.com/freemocap/freemocap):**  
   - Copy your `.toml` calibration file to the Pose2Sim `Calibration` folder.
   - Calibration can be skipped since these formats are natively supported by Pose2Sim.
@@ -460,6 +462,7 @@ If you already have a calibration file, set `calibration_type` type to `convert`
   - Export calibration to `.qca.txt` within QTM.
   - Copy it in the `Calibration` Pose2Sim folder.
   - set `convert_from` to 'qualisys' in your [Config.toml](https://github.com/perfanalytics/pose2sim/blob/main/Pose2Sim/Demo_SinglePerson/Config.toml) file. Change `binning_factor` to 2 if you film in 540p.
+  - If you set your cameras vertically and the videos are rendered sideways, you need to rotate them and the calibration file before running pose estimation. [Use this script](https://github.com/perfanalytics/pose2sim/issues/136#issuecomment-2398110061).
 - **From [Optitrack](https://optitrack.com/):** Exporting calibration will be available in Motive 3.2. In the meantime:
   - Calculate intrinsics with a board (see next section).
   - Use their C++ API [to retrieve extrinsic properties](https://docs.optitrack.com/developer-tools/motive-api/motive-api-function-reference#tt_cameraxlocation). Translation can be copied as is in your `Calib.toml` file, but TT_CameraOrientationMatrix first needs to be [converted to a Rodrigues vector](https://docs.opencv.org/3.4/d9/d0c/group__calib3d.html#ga61585db663d9da06b68e70cfbf6a1eac) with OpenCV. See instructions [here](https://github.com/perfanalytics/pose2sim/issues/28).
@@ -551,15 +554,14 @@ Pose2Sim.synchronization()
 
 <img src="Content/P2S_synchronization.png" width="760">
 
-</br>
-
 In `multi_person` mode, a video will pop up to let the user choose on which person to synchronize.\
-All keypoints can be taken into account, or a subset of them.\
-The whole capture can be used for synchronization, or you can choose a time range when the participant is roughly horizontally static but with a clear vertical motion (set `approx_time_maxspeed` and `time_range_around_maxspeed` accordingly). 
-
 <img src="Content/synchro_multi.jpg" width="380">
 
 <img src="Content/synchro.jpg" width="760">
+
+If results are not satisfying, edit your [Config.toml](https://github.com/perfanalytics/pose2sim/blob/main/Pose2Sim/Demo_SinglePerson/Config.toml) file:\
+All keypoints can be taken into account, or a subset of them.\
+The whole capture can be used for synchronization, or you can choose a time range when the participant is roughly horizontally static but with a clear vertical motion (set `approx_time_maxspeed` and `time_range_around_maxspeed` accordingly). 
 
 *N.B.:* Works best when:
 - the participant does not move towards or away from the cameras
@@ -589,7 +591,7 @@ Pose2Sim.personAssociation()
    
 </br>
 
-Check printed output. If results are not satisfying, try and release the constraints in the [Config.toml](https://github.com/perfanalytics/pose2sim/blob/main/Pose2Sim/S00_Demo_Session/Config.toml) file.
+Check printed output. If results are not satisfying, try and release the constraints in the [Config.toml](https://github.com/perfanalytics/pose2sim/blob/main/Pose2Sim/Demo_SinglePerson/Config.toml) file.
 
 </br>
 
@@ -611,7 +613,7 @@ Pose2Sim.triangulation()
 </br>
 
 Check printed output, and visualize your trc in OpenSim: `File -> Preview experimental data`.\
-If your triangulation is not satisfying, try and release the constraints in the `Config.toml` file.
+If your triangulation is not satisfying, try and release the constraints in the [Config.toml](https://github.com/perfanalytics/pose2sim/blob/main/Pose2Sim/Demo_SinglePerson/Config.toml) file.
 
 </br>
 
@@ -631,7 +633,7 @@ Pose2Sim.filtering()
 
 </br>
 
-Check your filtration with the displayed figures, and visualize your .trc file in OpenSim. If your filtering is not satisfying, try and change the parameters in the `Config.toml` file.
+Check your filtration with the displayed figures, and visualize your .trc file in OpenSim. If your filtering is not satisfying, try and change the parameters in the [Config.toml](https://github.com/perfanalytics/pose2sim/blob/main/Pose2Sim/Demo_SinglePerson/Config.toml) file.
 
 Output:\
 <img src="Content/FilterPlot.png" width="760">
@@ -644,7 +646,7 @@ _**Note that inverse kinematic results are not necessarily better after marker a
 
 *N.B.:* Marker augmentation tends to give a more stable, but less precise output. In practice, it is mostly beneficial when using less than 4 cameras. 
 
-**Make sure that `participant_height` is correct in your `Config.toml` file.** `participant_mass` is mostly optional for IK.\
+**Make sure that `participant_height` is correct in your [Config.toml](https://github.com/perfanalytics/pose2sim/blob/main/Pose2Sim/Demo_SinglePerson/Config.toml) file.** `participant_mass` is mostly optional for IK.\
 Only works with models estimating at least the following keypoints (e.g., not COCO):
 ``` python
  ["Neck", "RShoulder", "LShoulder", "RHip", "LHip", "RKnee", "LKnee",
@@ -801,7 +803,7 @@ Converts a Pose2Sim .toml calibration file (e.g., from a checkerboard) to a Qual
 Converts an OpenCV .toml calibration file to OpenCap .pickle calibration files.
 
 [calib_toml_to_opencap.py]( )
-To convert OpenCap calibration tiles to a .toml file, please use Pose2Sim.calibration() and set convert_from = 'opencap' in Config.toml.
+To convert OpenCap calibration tiles to a .toml file, please use Pose2Sim.calibration() and set convert_from = 'opencap' in [Config.toml](https://github.com/perfanalytics/pose2sim/blob/main/Pose2Sim/Demo_SinglePerson/Config.toml).
    </pre>
 </details>
 
