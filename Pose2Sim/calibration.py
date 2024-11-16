@@ -48,6 +48,9 @@ from mpl_interactions import zoom_factory, panhandler
 from PIL import Image
 from contextlib import contextmanager,redirect_stderr,redirect_stdout
 from os import devnull
+import scipy.optimize as optimize
+import scipy.sparse as sparse
+import copy
 
 
 ## AUTHORSHIP INFORMATION
@@ -149,8 +152,100 @@ def read_qca(qca_path, binning_factor):
         
         fu = float(tag.get('focalLengthU'))/64/binning_factor \
             / (1080/res[i])
-        fv = float(tag.get('focalLengthV'))/64/binning_factor \
+        fv = fu / float(tag.attrib.get('pixelAspectRatio'))
+        cu = (float(tag.get('centerPointU'))/64/binning_factor \
+            - float(root.findall('cameras/camera/fov_video')[i].attrib.get('left'))) \
             / (1080/res[i])
+        cv = (float(tag.get('centerPointV'))/64/binning_factor \
+            - float(root.findall('cameras/camera/fov_video')[i].attrib.get('top'))) \
+            / (1080/res[i])
+        K += [np.array([fu, 0., cu, 0., fv, cv, 0., 0., 1.]).reshape(3,3)]
+
+    # Extrinsic parameters: rotation matrix and translation vector
+    for tag in root.findall('cameras/camera/transform'):
+        tx = float(tag.get('x'))/1000
+        ty = float(tag.get('y'))/1000
+        tz = float(tag.get('z'))/1000
+        r11 = float(tag.get('r11'))
+        r12 = float(tag.get('r12'))
+        r13 = float(tag.get('r13'))
+        r21 = float(tag.get('r21'))
+        r22 = float(tag.get('r22'))
+        r23 = float(tag.get('r23'))
+        r31 = float(tag.get('r31'))
+        r32 = float(tag.get('r32'))
+        r33 = float(tag.get('r33'))
+
+        # Rotation (by-column to by-line)
+        R += [np.array([r11, r12, r13, r21, r22, r23, r31, r32, r33]).reshape(3,3).T]
+        T += [np.array([tx, ty, tz])]
+   
+    # Cameras names by natural order
+    C_vid = [C[v] for v in vid_id]
+    C_vid_id = [C_vid.index(c) for c in sorted(C_vid, key=natural_sort_key)]
+    C_id = [vid_id[c] for c in C_vid_id]
+    C = [C[c] for c in C_id]
+    ret = [ret[c] for c in C_id]
+    S = [S[c] for c in C_id]
+    D = [D[c] for c in C_id]
+    K = [K[c] for c in C_id]
+    R = [R[c] for c in C_id]
+    T = [T[c] for c in C_id]
+   
+    return ret, C, S, D, K, R, T
+
+
+def read_qca(qca_path, binning_factor):
+    '''
+    Reads a Qualisys .qca.txt calibration file
+    Returns 6 lists of size N (N=number of cameras)
+    
+    INPUTS: 
+    - qca_path: path to .qca.txt calibration file: string
+    - binning_factor: usually 1: integer
+
+    OUTPUTS:
+    - ret: residual reprojection error in _mm_: list of floats
+    - C: camera name: list of strings
+    - S: image size: list of list of floats
+    - D: distorsion: list of arrays of floats
+    - K: intrinsic parameters: list of 3x3 arrays of floats
+    - R: extrinsic rotation: list of 3x3 arrays of floats
+    - T: extrinsic translation: list of arrays of floats
+    '''
+
+    root = etree.parse(qca_path).getroot()
+    ret, C, S, D, K, R, T = [], [], [], [], [], [], []
+    res = []
+    vid_id = []
+    
+    # Camera name
+    for i, tag in enumerate(root.findall('cameras/camera')):
+        ret += [float(tag.attrib.get('avg-residual'))]
+        C += [tag.attrib.get('serial')]
+        res += [int(tag.attrib.get('video_resolution')[:-1]) if tag.attrib.get('video_resolution') is not None else 1080]
+        if tag.attrib.get('model') in ('Miqus Video', 'Miqus Video UnderWater', 'none'):
+            vid_id += [i]
+    
+    # Image size
+    for i, tag in enumerate(root.findall('cameras/camera/fov_video')):
+        w = (float(tag.attrib.get('right')) - float(tag.attrib.get('left')) +1) /binning_factor \
+            / (1080/res[i]) 
+        h = (float(tag.attrib.get('bottom')) - float(tag.attrib.get('top')) +1) /binning_factor \
+            / (1080/res[i])
+        S += [[w, h]]
+    
+    # Intrinsic parameters: distorsion and intrinsic matrix
+    for i, tag in enumerate(root.findall('cameras/camera/intrinsic')):
+        k1 = float(tag.get('radialDistortion1'))/64/binning_factor
+        k2 = float(tag.get('radialDistortion2'))/64/binning_factor
+        p1 = float(tag.get('tangentalDistortion1'))/64/binning_factor
+        p2 = float(tag.get('tangentalDistortion2'))/64/binning_factor
+        D+= [np.array([k1, k2, p1, p2])]
+        
+        fu = float(tag.get('focalLengthU'))/64/binning_factor \
+            / (1080/res[i])
+        fv = fu / float(tag.attrib.get('pixelAspectRatio'))
         cu = (float(tag.get('centerPointU'))/64/binning_factor \
             - float(root.findall('cameras/camera/fov_video')[i].attrib.get('left'))) \
             / (1080/res[i])
@@ -334,7 +429,7 @@ def read_intrinsic_yml(intrinsic_path):
         D.append(intrinsic_yml.getNode(f'dist_{name}').mat().flatten()[:-1])
         S.append([K[i][0,2]*2, K[i][1,2]*2])
     return N, S, K, D
-    
+
 
 def read_extrinsic_yml(extrinsic_path):
     '''
@@ -410,11 +505,11 @@ def calib_biocv_fun(files_to_convert_paths, binning_factor=1):
             D += [[float(d) for d in calib_data[-2].split(' ')[:4]]]
             K += [np.array([k.strip().split(' ') for k in calib_data[2:5]], np.float32)]
             RT = np.array([k.strip().split(' ') for k in calib_data[6:9]], np.float32)
-            R += [cv2.Rodrigues(RT[:,:3])[0].squeeze()]
-            T += [RT[:,3]/1000]
+            R+=[cv2.Rodrigues(RT[:,:3])[0].squeeze()]
+            T+=[RT[:,3]/1000]
                         
     return ret, C, S, D, K, R, T
-
+    
 
 def calib_opencap_fun(files_to_convert_paths, binning_factor=1):
     '''
@@ -517,7 +612,11 @@ def calib_calc_fun(calib_dir, intrinsics_config_dict, extrinsics_config_dict):
     else:
         logging.info(f'\nCalculating intrinsic parameters...')
         ret, C, S, D, K, R, T = calibrate_intrinsics(calib_dir, intrinsics_config_dict)
-        nb_cams_intrinsics = len(C)
+        
+        # Ensure D is initialized properly
+        for i in range(len(D)):
+            if D[i] is None or len(D[i]) == 0:
+                D[i] = np.zeros(4, dtype=np.float64)  # Default distortion coefficients
 
     # calculate extrinsics
     if calculate_extrinsics:
@@ -536,110 +635,409 @@ def calib_calc_fun(calib_dir, intrinsics_config_dict, extrinsics_config_dict):
     return ret, C, S, D, K, R, T
 
 
-def calibrate_intrinsics(calib_dir, intrinsics_config_dict):
-    '''
-    Calculate intrinsic parameters
-    from images or videos of a checkerboard
-    Extract frames, then detect corners, then calibrate
-
-    INPUTS:
-    - calib_dir: directory containing intrinsic and extrinsic folders, each populated with camera directories
-    - intrinsics_config_dict: dictionary of intrinsics parameters (overwrite_intrinsics, show_detection_intrinsics, intrinsics_extension, extract_every_N_sec, intrinsics_corners_nb, intrinsics_square_size, intrinsics_marker_size, intrinsics_aruco_dict)
-
-    OUTPUTS:
-    - D: distorsion: list of arrays of floats
-    - K: intrinsic parameters: list of 3x3 arrays of floats
-    '''
-
+def project_points_safely(object_points, rvec, tvec, camera_matrix, dist_coeffs):
+    """
+    Safely project 3D points to 2D image points.
+    
+    Args:
+        object_points: 3D points in world coordinates
+        rvec: Rotation vector
+        tvec: Translation vector  
+        camera_matrix: Camera intrinsic matrix
+        dist_coeffs: Distortion coefficients
+        
+    Returns:
+        Projected 2D points or None if projection fails
+    """
     try:
-        intrinsics_cam_listdirs_names = next(os.walk(os.path.join(calib_dir, 'intrinsics')))[1]
-    except StopIteration:
-        logging.exception(f'Error: No {os.path.join(calib_dir, "intrinsics")} folder found.')
-        raise Exception(f'Error: No {os.path.join(calib_dir, "intrinsics")} folder found.')
-    intrinsics_extension = intrinsics_config_dict.get('intrinsics_extension')
-    extract_every_N_sec = intrinsics_config_dict.get('extract_every_N_sec')
-    overwrite_extraction = False
-    show_detection_intrinsics = intrinsics_config_dict.get('show_detection_intrinsics')
-    intrinsics_corners_nb = intrinsics_config_dict.get('intrinsics_corners_nb')
-    intrinsics_square_size = intrinsics_config_dict.get('intrinsics_square_size') / 1000 # convert to meters
-    ret, C, S, D, K, R, T = [], [], [], [], [], [], []
+        dist_coeffs = np.array(dist_coeffs).flatten()
+        return cv2.projectPoints(object_points, rvec, tvec, camera_matrix, dist_coeffs)
+    except Exception as e:
+        logging.error(f"Error in point projection: {str(e)}")
+        return None
 
-    for i,cam in enumerate(intrinsics_cam_listdirs_names):
-        # Prepare object points
-        objp = np.zeros((intrinsics_corners_nb[0]*intrinsics_corners_nb[1],3), np.float32) 
-        objp[:,:2] = np.mgrid[0:intrinsics_corners_nb[0],0:intrinsics_corners_nb[1]].T.reshape(-1,2)
-        objp[:,:2] = objp[:,0:2]*intrinsics_square_size
-        objpoints = [] # 3d points in world space
-        imgpoints = [] # 2d points in image plane
-
-        logging.info(f'\nCamera {cam}:')
-        img_vid_files = glob.glob(os.path.join(calib_dir, 'intrinsics', cam, f'*.{intrinsics_extension}'))
-        if len(img_vid_files) == 0:
-            logging.exception(f'The folder {os.path.join(calib_dir, "intrinsics", cam)} does not exist or does not contain any files with extension .{intrinsics_extension}.')
-            raise ValueError(f'The folder {os.path.join(calib_dir, "intrinsics", cam)} does not exist or does not contain any files with extension .{intrinsics_extension}.')
-        img_vid_files = sorted(img_vid_files, key=lambda c: [int(n) for n in re.findall(r'\d+', c)]) #sorting paths with numbers
+def compute_reprojection_error(projected_points, observed_points):
+    """
+    Compute reprojection error between projected and observed points.
+    This is the standard method used throughout the code.
+    
+    Args:
+        projected_points: Projected 2D points (N x 2)
+        observed_points: Observed 2D points (N x 2)
         
-        # extract frames from video if video
-        try:
-            cap = cv2.VideoCapture(img_vid_files[0])
-            cap.read()
-            if cap.read()[0] == False:
-                raise
-            extract_frames(img_vid_files[0], extract_every_N_sec, overwrite_extraction)
-            img_vid_files = glob.glob(os.path.join(calib_dir, 'intrinsics', cam, f'*.png'))
-            img_vid_files = sorted(img_vid_files, key=lambda c: [int(n) for n in re.findall(r'\d+', c)])
-        except:
-            pass
+    Returns:
+        float: RMS error in pixels
+    """
+    # Ensure points are in the right shape
+    projected_points = np.array(projected_points).reshape(-1, 2)
+    observed_points = np.array(observed_points).reshape(-1, 2)
+    
+    # Calculate error for each point
+    errors = projected_points - observed_points
+    
+    # Calculate Euclidean distance for each point
+    distances = np.sqrt(np.sum(errors * errors, axis=1))
+    
+    # Return RMS error
+    return float(np.sqrt(np.mean(distances * distances)))
 
-        # find corners
-        for img_path in img_vid_files:
-            if show_detection_intrinsics == True:
-                imgp_confirmed, objp_confirmed = findCorners(img_path, intrinsics_corners_nb, objp=objp, show=show_detection_intrinsics)
-                if isinstance(imgp_confirmed, np.ndarray):
-                    imgpoints.append(imgp_confirmed)
-                    objpoints.append(objp_confirmed)
+def compute_standardized_rms_error(proj_points, image_points):
+    """
+    Compute standardized RMS error consistently across all stages.
+    Returns error in pixels.
+    """
+    diff = proj_points - image_points
+    # Calculate Euclidean distance for each point
+    distances = np.sqrt(np.sum(diff * diff, axis=1))
+    # Calculate RMS
+    rms = np.sqrt(np.mean(distances * distances))
+    return rms
+
+def create_objective_function(cameras_params, object_points, image_points, initial_K, initial_D):
+    """
+    Create objective function for bundle adjustment optimization.
+    
+    Args:
+        cameras_params: List of camera parameters
+        object_points: 3D object points
+        image_points: Observed 2D points
+        initial_K: Initial camera matrices
+        initial_D: Initial distortion coefficients
+        
+    Returns:
+        Objective function for optimization
+    """
+    n_cams = len(cameras_params)
+    
+    def objective(params):
+        total_error = []
+        
+        # For each camera
+        for i in range(n_cams):
+            # Extract camera parameters
+            cam_params = params[i * 9:(i + 1) * 9]
+            rvec = cam_params[0:3]
+            tvec = cam_params[3:6]
+            
+            # Extract and reconstruct intrinsic parameters
+            fx = cam_params[6]
+            fy = cam_params[7]
+            cx = cam_params[8]
+            
+            K = np.array([
+                [fx, 0, cx],
+                [0, fy, initial_K[i][1,1]],  # Keep skew parameter fixed
+                [0, 0, 1]
+            ])
+            
+            # Project points
+            projected_pts = project_points_safely(object_points, rvec, tvec, K, initial_D[i])[0]
+            
+            if projected_pts is None:
+                return np.full(len(image_points[i].flatten()), 1e6)
+            
+            # Compute reprojection error
+            error = (projected_pts - image_points[i]).ravel()
+            total_error.extend(error)
+        
+        return np.array(total_error)
+    
+    return objective
+
+def initialize_camera_parameters(cameras_params):
+    """
+    Initialize camera parameters for optimization including intrinsics.
+    
+    Args:
+        cameras_params: List of camera parameters containing R, T, and K
+        
+    Returns:
+        initial_params: Flattened array of rotation, translation, and intrinsic parameters
+    """
+    n_cams = len(cameras_params)
+    initial_params = np.zeros(n_cams * 9)  # 3 for R, 3 for T, 3 for K
+    
+    for i in range(n_cams):
+        # Rotation and translation
+        r = cv2.Rodrigues(cameras_params[i]['R'])[0].flatten()
+        t = cameras_params[i]['T'].flatten()
+        
+        # Intrinsic parameters (fx, fy, cx)
+        K = cameras_params[i]['K']
+        k_params = np.array([K[0,0], K[1,1], K[0,2]])
+        
+        # Combine parameters
+        initial_params[i*9:(i+1)*9] = np.concatenate([r, t, k_params])
+    
+    return initial_params
+
+def update_camera_parameters(cameras_params, optimized_params):
+    """
+    Update camera parameters with optimization results.
+    
+    Args:
+        cameras_params: List of camera parameters to update
+        optimized_params: Optimized parameters from bundle adjustment
+        
+    Returns:
+        Updated camera parameters
+    """
+    n_cams = len(cameras_params)
+    for i in range(n_cams):
+        params = optimized_params[i*9:(i+1)*9]
+        rvec = params[0:3]
+        tvec = params[3:6]
+        fx = params[6]
+        fy = params[7]
+        cx = params[8]
+        
+        # Update rotation and translation
+        cameras_params[i]['R'] = cv2.Rodrigues(rvec)[0]
+        cameras_params[i]['T'] = tvec.reshape(3, 1)
+        
+        # Update intrinsic parameters
+        K = cameras_params[i]['K'].copy()
+        K[0,0] = fx  # fx
+        K[1,1] = fy  # fy
+        K[0,2] = cx  # cx
+        cameras_params[i]['K'] = K
+    
+    return cameras_params
+
+def bundle_adjust_cameras(cameras_params, object_points, image_points, initial_K, initial_D):
+    """
+    Perform bundle adjustment to optimize camera extrinsic parameters.
+    """
+    # Validate and prepare inputs
+    n_cams = len(cameras_params)
+    if n_cams == 0:
+        raise ValueError("No cameras to optimize")
+    
+    if len(object_points) == 0:
+        raise ValueError("No object points provided")
+        
+    try:
+        # Store previous errors and best parameters for each camera
+        prev_errors = [float('inf')] * n_cams
+        best_params = [None] * n_cams
+        best_errors = [float('inf')] * n_cams
+        
+        # Initialize optimization parameters
+        initial_params = initialize_camera_parameters(cameras_params)
+        params_per_camera = len(initial_params) // n_cams
+        
+        # Create objective function
+        def objective(params):
+            total_error = 0
+            camera_errors = []
+            all_errors = []
+            
+            for i in range(n_cams):
+                start_idx = i * params_per_camera
+                cam_params = params[start_idx:start_idx + params_per_camera]
+                
+                # Extract camera parameters
+                R = cv2.Rodrigues(cam_params[:3])[0]
+                T = cam_params[3:6]
+                
+                # Project points
+                proj_points = project_points_safely(object_points, cam_params[:3], T, initial_K[i], initial_D[i])[0]
+                
+                # Compute error using standard method
+                rms_error = compute_reprojection_error(proj_points, image_points[i])
+                camera_errors.append(rms_error)
+                
+                # For optimization, collect all point errors
+                point_errors = (proj_points - image_points[i]).ravel()
+                all_errors.extend(point_errors)
+                
+                # Track improvement and store best parameters
+                if rms_error < best_errors[i]:
+                    best_errors[i] = rms_error
+                    best_params[i] = cam_params.copy()
+                    logging.info(f"Camera {i+1}: RMS error improved to {rms_error:.3f} pixels")
+            
+            # Print summary every few iterations
+            if np.random.random() < 0.1:  # Print roughly every 10th iteration
+                error_summary = " | ".join([f"Cam{i+1}: {err:.3f}px" for i, err in enumerate(camera_errors)])
+                logging.info(f"Current RMS errors - {error_summary}")
+            
+            return np.array(all_errors)
+        
+        logging.info("\nStarting bundle adjustment optimization...")
+        logging.info(f"Number of cameras: {n_cams}")
+        logging.info(f"Number of points per camera: {len(object_points)}")
+        
+        # Run optimization with improved parameters
+        result = optimize.least_squares(
+            objective,
+            initial_params,
+            method='lm',
+            ftol=1e-8,
+            xtol=1e-8,
+            gtol=1e-8,
+            max_nfev=5000,
+            verbose=2
+        )
+        
+        if not result.success:
+            raise RuntimeError(f"Optimization failed: {result.message}")
+        
+        # Construct final parameters using best results for each camera
+        final_params = np.zeros_like(initial_params)
+        for i in range(n_cams):
+            if best_params[i] is not None:
+                start_idx = i * params_per_camera
+                final_params[start_idx:start_idx + params_per_camera] = best_params[i]
             else:
-                imgp_confirmed = findCorners(img_path, intrinsics_corners_nb, objp=objp, show=show_detection_intrinsics)
-                if isinstance(imgp_confirmed, np.ndarray):
-                    imgpoints.append(imgp_confirmed)
-                    objpoints.append(objp)
-        if len(imgpoints) < 10:
-            logging.info(f'Corners were detected only on {len(imgpoints)} images for camera {cam}. Calibration of intrinsic parameters may not be accurate with fewer than 10 good images of the board.')
-
-        # calculate intrinsics
-        img = cv2.imread(str(img_path))
-        objpoints = np.array(objpoints)
-        ret_cam, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(objpoints, imgpoints, img.shape[1::-1], 
-                                    None, None, flags=(cv2.CALIB_FIX_K3))# + cv2.CALIB_FIX_PRINCIPAL_POINT))
-        h, w = [np.float32(i) for i in img.shape[:-1]]
-        ret.append(ret_cam)
-        C.append(cam)
-        S.append([w, h])
-        D.append(dist[0])
-        K.append(mtx)
-        R.append([0.0, 0.0, 0.0])
-        T.append([0.0, 0.0, 0.0])
+                # If no improvement was found, use the original optimization result
+                start_idx = i * params_per_camera
+                final_params[start_idx:start_idx + params_per_camera] = result.x[start_idx:start_idx + params_per_camera]
         
-        logging.info(f'Intrinsics error: {np.around(ret_cam, decimals=3)} px for each cameras.')
+        # Final error calculation using best parameters
+        final_errors = []
+        for i in range(n_cams):
+            start_idx = i * params_per_camera
+            cam_params = final_params[start_idx:start_idx + params_per_camera]
+            proj_points = project_points_safely(object_points, cam_params[:3], cam_params[3:6], initial_K[i], initial_D[i])[0]
+            rms_error = compute_reprojection_error(proj_points, image_points[i])
+            final_errors.append(rms_error)
+        
+        logging.info("\nFinal RMS errors (using best parameters):")
+        for i, error in enumerate(final_errors):
+            logging.info(f"Camera {i+1}: {error:.3f} pixels")
+            
+        # Update camera parameters using best results
+        cameras_params = update_camera_parameters(cameras_params, final_params)
+        
+        return cameras_params
 
-    return ret, C, S, D, K, R, T
+    except Exception as e:
+        logging.error(f"Bundle adjustment failed: {str(e)}")
+        logging.error(f"object_points shape: {object_points.shape}")
+        logging.error(f"Number of cameras: {len(cameras_params)}")
+        for i, pts in enumerate(image_points):
+            logging.error(f"image_points[{i}] shape: {pts.shape}")
+        return cameras_params
 
+def get_initial_camera_estimate(object_coords_3d, imgp, K_mat, D_vec):
+    """
+    Get initial camera pose estimate using PnP.
+    
+    Args:
+        object_coords_3d: 3D object points
+        imgp: 2D image points
+        K_mat: Camera matrix
+        D_vec: Distortion coefficients
+        
+    Returns:
+        Tuple of (success, rotation vector, translation vector)
+    """
+    # Try EPNP first
+    success, r, t = cv2.solvePnP(object_coords_3d, imgp, K_mat, D_vec, flags=cv2.SOLVEPNP_EPNP)
+    
+    if not success:
+        # Try ITERATIVE if EPNP fails
+        success, r, t = cv2.solvePnP(object_coords_3d, imgp, K_mat, D_vec, flags=cv2.SOLVEPNP_ITERATIVE)
+        if not success:
+            return False, None, None
+    
+    # Refine initial estimate
+    success, r, t = cv2.solvePnP(object_coords_3d, imgp, K_mat, D_vec,
+                               rvec=r, tvec=t,
+                               useExtrinsicGuess=True,
+                               flags=cv2.SOLVEPNP_ITERATIVE)
+    
+    return success, r, t
+
+def visualize_reprojection(img_path, image_points, projected_points, error):
+    """
+    Visualize reprojection results.
+    
+    Args:
+        img_path: Path to image file
+        image_points: Original 2D points
+        projected_points: Reprojected 2D points
+        error: Reprojection error
+    """
+    img = cv2.imread(img_path)
+    if img is None:
+        cap = cv2.VideoCapture(img_path)
+        ret_vid, img = cap.read()
+        cap.release()
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    
+    # Draw points
+    for pt_img, pt_proj in zip(image_points, projected_points):
+        cv2.circle(img, tuple(map(int, pt_img)), 3, (0,255,0), -1)  # Original points in green
+        cv2.circle(img, tuple(map(int, pt_proj)), 3, (0,0,255), 1)  # Projected points in red
+    
+    # Add legend
+    cv2.putText(img, f'Reprojection error: {error:.2f} px', (10, 30),
+               cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2)
+    
+    # Display
+    plt.figure(figsize=(12,8))
+    plt.imshow(img)
+    plt.title(f'Reprojection Results')
+    plt.axis('off')
+    plt.show()
+
+def process_camera_extrinsics(cam, img_vid_files, object_coords_3d, K, D, show_reprojection_error, extrinsics_method):
+    """
+    Process extrinsic calibration for a single camera.
+    
+    Args:
+        cam: Camera name/identifier
+        img_vid_files: List of image/video files
+        object_coords_3d: 3D object points
+        K: Camera matrix
+        D: Distortion coefficients
+        show_reprojection_error: Whether to show reprojection visualization
+        extrinsics_method: Method for extrinsic calibration ('board' or 'scene')
+        
+    Returns:
+        Tuple of (image points, camera parameters)
+    """
+    logging.info(f'\nCamera {cam}:')
+    
+    if len(img_vid_files) == 0:
+        raise ValueError(f'No files found for camera {cam}')
+        
+    # Get image points
+    if extrinsics_method == 'board':
+        imgp, objp = findCorners(img_vid_files[0], extrinsics_corners_nb, objp=object_coords_3d, show=show_reprojection_error)
+    else:
+        img = cv2.imread(img_vid_files[0])
+        if img is None:
+            cap = cv2.VideoCapture(img_vid_files[0])
+            ret_vid, img = cap.read()
+            cap.release()
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        imgp, objp = imgp_objp_visualizer_clicker(img, imgp=[], objp=object_coords_3d, img_path=img_vid_files[0])
+    
+    if len(imgp) == 0:
+        raise ValueError(f'No points found for camera {cam}')
+    
+    # Ensure proper numpy array formatting
+    objp = np.array(objp, dtype=np.float32)
+    imgp = np.array(imgp, dtype=np.float32)
+    K_mat = np.array(K, dtype=np.float32)
+    D_vec = np.array(D, dtype=np.float32).flatten()
+    
+    # Get initial extrinsic estimate
+    success, r, t = get_initial_camera_estimate(objp, imgp, K_mat, D_vec)
+    if not success:
+        raise RuntimeError(f'PnP failed for camera {cam}')
+    
+    return imgp, {'K': K_mat, 'D': D_vec, 'R': cv2.Rodrigues(r)[0], 'T': t.flatten()}
 
 def calibrate_extrinsics(calib_dir, extrinsics_config_dict, C, S, K, D):
     '''
-    Calibrates extrinsic parameters
+    Calibrates extrinsic parameters with bundle adjustment
     from an image or the first frame of a video
     of a checkerboard or of measured clues on the scene
-
-    INPUTS:
-    - calib_dir: directory containing intrinsic and extrinsic folders, each populated with camera directories
-    - extrinsics_config_dict: dictionary of extrinsics parameters (extrinsics_method, calculate_extrinsics, show_detection_extrinsics, extrinsics_extension, extrinsics_corners_nb, extrinsics_square_size, extrinsics_marker_size, extrinsics_aruco_dict, object_coords_3d)
-
-    OUTPUTS:
-    - R: extrinsic rotation: list of arrays of floats (Rodrigues)
-    - T: extrinsic translation: list of arrays of floats
     '''
-
     try:
         extrinsics_cam_listdirs_names = next(os.walk(os.path.join(calib_dir, 'extrinsics')))[1]
     except StopIteration:
@@ -647,122 +1045,100 @@ def calibrate_extrinsics(calib_dir, extrinsics_config_dict, C, S, K, D):
         raise Exception(f'Error: No {os.path.join(calib_dir, "extrinsics")} folder found.')
     
     extrinsics_method = extrinsics_config_dict.get('extrinsics_method')
-    ret, R, T = [], [], []
+    ret = []
+    R = []
+    T = []
     
-    if extrinsics_method in {'board', 'scene'}:
-                
+    if extrinsics_method in ('board', 'scene'):
         # Define 3D object points
         if extrinsics_method == 'board':
             extrinsics_corners_nb = extrinsics_config_dict.get('board').get('extrinsics_corners_nb')
-            extrinsics_square_size = extrinsics_config_dict.get('board').get('extrinsics_square_size') / 1000 # convert to meters
+            extrinsics_square_size = extrinsics_config_dict.get('board').get('extrinsics_square_size') / 1000
             object_coords_3d = np.zeros((extrinsics_corners_nb[0] * extrinsics_corners_nb[1], 3), np.float32)
             object_coords_3d[:, :2] = np.mgrid[0:extrinsics_corners_nb[0], 0:extrinsics_corners_nb[1]].T.reshape(-1, 2)
             object_coords_3d[:, :2] = object_coords_3d[:, 0:2] * extrinsics_square_size
-        elif extrinsics_method == 'scene':
+        else:
             object_coords_3d = np.array(extrinsics_config_dict.get('scene').get('object_coords_3d'), np.float32)
                 
         # Save reference 3D coordinates as trc
         calib_output_path = os.path.join(calib_dir, f'Object_points.trc')
         trc_write(object_coords_3d, calib_output_path)
     
-        for i, cam in enumerate(extrinsics_cam_listdirs_names):
-            logging.info(f'\nCamera {cam}:')
-            
-            # Read images or video
-            extrinsics_extension = [extrinsics_config_dict.get('board').get('extrinsics_extension') if extrinsics_method == 'board'
-                                    else extrinsics_config_dict.get('scene').get('extrinsics_extension')][0]
-            show_reprojection_error = [extrinsics_config_dict.get('board').get('show_reprojection_error') if extrinsics_method == 'board'
-                                    else extrinsics_config_dict.get('scene').get('show_reprojection_error')][0]
-            img_vid_files = glob.glob(os.path.join(calib_dir, 'extrinsics', cam, f'*.{extrinsics_extension}'))
-            if len(img_vid_files) == 0:
-                logging.exception(f'The folder {os.path.join(calib_dir, "extrinsics", cam)} does not exist or does not contain any files with extension .{extrinsics_extension}.')
-                raise ValueError(f'The folder {os.path.join(calib_dir, "extrinsics", cam)} does not exist or does not contain any files with extension .{extrinsics_extension}.')
-            img_vid_files = sorted(img_vid_files, key=lambda c: [int(n) for n in re.findall(r'\d+', c)]) #sorting paths with numbers
-            
-            # extract frames from image, or from video if imread is None
-            img = cv2.imread(img_vid_files[0])
-            if img is None:
-                cap = cv2.VideoCapture(img_vid_files[0])
-                res, img = cap.read()
-                if res == False:
-                    raise
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-            # Find corners or label by hand
-            if extrinsics_method == 'board':
-                imgp = findCorners(img_vid_files[0], extrinsics_corners_nb, objp=object_coords_3d, show=show_reprojection_error)
-                objp = object_coords_3d
-                if len(imgp) == 0:
-                    logging.exception('No corners found. Set "show_detection_extrinsics" to true to click corners by hand, or change extrinsic_board_type to "scene"')
-                    raise ValueError('No corners found. Set "show_detection_extrinsics" to true to click corners by hand, or change extrinsic_board_type to "scene"')
-
-            elif extrinsics_method == 'scene':
-                imgp, objp = imgp_objp_visualizer_clicker(img, imgp=[], objp=object_coords_3d, img_path=img_vid_files[0])
-                if len(imgp) == 0:
-                    logging.exception('No points clicked (or fewer than 6). Press \'C\' when the image is displayed, and then click on the image points corresponding to the \'object_coords_3d\' you measured and wrote down in the Config.toml file.')
-                    raise ValueError('No points clicked (or fewer than 6). Press \'C\' when the image is displayed, and then click on the image points corresponding to the \'object_coords_3d\' you measured and wrote down in the Config.toml file.')
-                if len(objp) < 10:
-                    logging.info(f'Only {len(objp)} reference points for camera {cam}. Calibration of extrinsic parameters may not be accurate with fewer than 10 reference points, as spread out in the captured volume as possible.')
-            
-            elif extrinsics_method == 'keypoints':
-                logging.info('Calibration based on keypoints is not available yet.')
-            
-            # Calculate extrinsics
-            mtx, dist = np.array(K[i]), np.array(D[i])
-            _, r, t = cv2.solvePnP(np.array(objp)*1000, imgp, mtx, dist)
-            r, t = r.flatten(), t.flatten()
-            t /= 1000 
-
-            # Projection of object points to image plane
-            # # Former way, distortions used to be ignored
-            # Kh_cam = np.block([mtx, np.zeros(3).reshape(3,1)])
-            # r_mat, _ = cv2.Rodrigues(r)
-            # H_cam = np.block([[r_mat,t.reshape(3,1)], [np.zeros(3), 1 ]])
-            # P_cam = Kh_cam @ H_cam
-            # proj_obj = [ ( P_cam[0] @ np.append(o, 1) /  (P_cam[2] @ np.append(o, 1)),  P_cam[1] @ np.append(o, 1) /  (P_cam[2] @ np.append(o, 1)) ) for o in objp]
-            proj_obj = np.squeeze(cv2.projectPoints(objp,r,t,mtx,dist)[0])
-
-            # Check calibration results
-            if show_reprojection_error:
-                # Reopen image, otherwise 2 sets of text are overlaid
-                img = cv2.imread(img_vid_files[0])
-                if img is None:
-                    cap = cv2.VideoCapture(img_vid_files[0])
-                    res, img = cap.read()
-                    if res == False:
-                        raise
-                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-                for o in proj_obj:
-                    cv2.circle(img, (int(o[0]), int(o[1])), 8, (0,0,255), -1) 
-                for i in imgp:
-                    cv2.drawMarker(img, (int(i[0][0]), int(i[0][1])), (0,255,0), cv2.MARKER_CROSS, 15, 2)
-                cv2.putText(img, 'Verify calibration results, then close window.', (20, 20), cv2.FONT_HERSHEY_SIMPLEX, .7, (255,255,255), 7, lineType = cv2.LINE_AA)
-                cv2.putText(img, 'Verify calibration results, then close window.', (20, 20), cv2.FONT_HERSHEY_SIMPLEX, .7, (0,0,0), 2, lineType = cv2.LINE_AA) 
-                cv2.drawMarker(img, (20,40), (0,255,0), cv2.MARKER_CROSS, 15, 2)
-                cv2.putText(img, '    Clicked points', (20, 40), cv2.FONT_HERSHEY_SIMPLEX, .7, (255,255,255), 7, lineType = cv2.LINE_AA)
-                cv2.putText(img, '    Clicked points', (20, 40), cv2.FONT_HERSHEY_SIMPLEX, .7, (0,0,0), 2, lineType = cv2.LINE_AA)    
-                cv2.circle(img, (20,60), 8, (0,0,255), -1)    
-                cv2.putText(img, '    Reprojected object points', (20, 60), cv2.FONT_HERSHEY_SIMPLEX, .7, (255,255,255), 7, lineType = cv2.LINE_AA)
-                cv2.putText(img, '    Reprojected object points', (20, 60), cv2.FONT_HERSHEY_SIMPLEX, .7, (0,0,0), 2, lineType = cv2.LINE_AA)    
-                im_pil = Image.fromarray(img)
-                im_pil.show(title = os.path.basename(img_vid_files[0]))
-
-            # Calculate reprojection error
-            imgp_to_objreproj_dist = [euclidean_distance(proj_obj[n], imgp[n]) for n in range(len(proj_obj))]
-            rms_px = np.sqrt(np.sum([d**2 for d in imgp_to_objreproj_dist]))
-            ret.append(rms_px)
-            R.append(r)
-            T.append(t)
+        # Process each camera
+        cameras_params = []
+        image_points = []
         
-    elif extrinsics_method == 'keypoints':
-        raise NotImplementedError('This has not been integrated yet.')
+        for i, cam in enumerate(extrinsics_cam_listdirs_names):
+            try:
+                # Get image/video files
+                extrinsics_extension = [extrinsics_config_dict.get('board').get('extrinsics_extension') if extrinsics_method == 'board'
+                                      else extrinsics_config_dict.get('scene').get('extrinsics_extension')][0]
+                show_reprojection_error = [extrinsics_config_dict.get('board').get('show_reprojection_error') if extrinsics_method == 'board'
+                                         else extrinsics_config_dict.get('scene').get('show_reprojection_error')][0]
+                
+                img_vid_files = glob.glob(os.path.join(calib_dir, 'extrinsics', cam, f'*.{extrinsics_extension}'))
+                
+                # Process camera extrinsics
+                imgp, camera_params = process_camera_extrinsics(
+                    cam, img_vid_files, object_coords_3d, K[i], D[i],
+                    show_reprojection_error, extrinsics_method
+                )
+                
+                cameras_params.append(camera_params)
+                image_points.append(imgp.reshape(-1, 2))
+                
+            except Exception as e:
+                logging.error(f"Error processing camera {cam}: {str(e)}")
+                continue
+        
+        # Perform bundle adjustment
+        logging.info('\nPerforming global bundle adjustment...')
+        try:
+            optimized_params = bundle_adjust_cameras(cameras_params, object_coords_3d, image_points, initial_K=K, initial_D=D)
+            
+            # Extract optimized parameters and compute errors
+            for i, params in enumerate(optimized_params):
+                r = cv2.Rodrigues(params['R'])[0].flatten()
+                t = params['T'].flatten()
+                
+                # Compute reprojection error
+                proj_points = project_points_safely(object_coords_3d, r, t, K[i], D[i])[0].reshape(-1, 2)
+                error = compute_reprojection_error(proj_points, image_points[i])
+                
+                ret.append(float(error))
+                R.append(r)
+                T.append(t)
+                
+                # Visualize results if requested
+                if show_reprojection_error:
+                    visualize_reprojection(img_vid_files[0], image_points[i], proj_points, error)
+            
+            logging.info('Bundle adjustment completed successfully')
+            
+        except Exception as e:
+            logging.error(f"Bundle adjustment failed: {str(e)}")
+            # Use initial PnP estimates if bundle adjustment fails
+            for i, params in enumerate(cameras_params):
+                r = cv2.Rodrigues(params['R'])[0].flatten()
+                t = params['T'].flatten()
+                
+                # Compute reprojection error
+                proj_points = project_points_safely(object_coords_3d, r, t, K[i], D[i])[0].reshape(-1, 2)
+                error = compute_reprojection_error(proj_points, image_points[i])
+                
+                ret.append(float(error))
+                R.append(r)
+                T.append(t)
+            
+            logging.warning('Using initial PnP estimates due to bundle adjustment failure')
     
+    elif extrinsics_method == 'keypoints':
+        logging.info('Calibration based on keypoints is not available yet.')
+        
     else:
         raise ValueError('Wrong value for extrinsics_method')
 
     return ret, C, S, D, K, R, T
-
 
 def findCorners(img_path, corner_nb, objp=[], show=True):
     '''
@@ -780,8 +1156,8 @@ def findCorners(img_path, corner_nb, objp=[], show=True):
     INPUTS:
     - img_path: path to image (or video)
     - corner_nb: [H, W] internal corners in checkerboard: list of two integers [4,7]
-    - optional: show: choose whether to show corner detections
-    - optional: objp: array [3d corner coordinates]
+    - optionnal: show: choose whether to show corner detections
+    - optionnal: objp: array [3d corner coordinates]
 
     OUTPUTS:
     - imgp_confirmed: array of [[2d corner coordinates]]
@@ -794,6 +1170,7 @@ def findCorners(img_path, corner_nb, objp=[], show=True):
     if img is None:
         cap = cv2.VideoCapture(img_path)
         ret, img = cap.read()
+        cap.release()
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     
@@ -821,16 +1198,14 @@ def findCorners(img_path, corner_nb, objp=[], show=True):
             imgp_objp_confirmed = imgp_objp_visualizer_clicker(img, imgp=imgp, objp=objp, img_path=img_path)
         else:
             imgp_objp_confirmed = imgp
-            
 
     # If corners are not found, dismiss or click points by hand
     else:
+        logging.info(f'{os.path.basename(img_path)}: Corners not found. To label them by hand, set "show_detection_intrinsics" to true in the Config.toml file.')
         if show:
             # Visualizer and key press event handler
-            logging.info(f'{os.path.basename(img_path)}: Corners not found: please label them by hand.')
             imgp_objp_confirmed = imgp_objp_visualizer_clicker(img, imgp=[], objp=objp, img_path=img_path)
         else:
-            logging.info(f'{os.path.basename(img_path)}: Corners not found. To label them by hand, set "show_detection_intrinsics" to true in the Config.toml file.')
             imgp_objp_confirmed = []
 
     return imgp_objp_confirmed
@@ -855,7 +1230,7 @@ def imgp_objp_visualizer_clicker(img, imgp=[], objp=[], img_path=''):
     INPUTS:
     - img: image opened with openCV
     - optional: imgp: detected image points, to be accepted or not. Array of [[2d corner coordinates]]
-    - optional: objp: array of [3d corner coordinates]
+    - optionnal: objp: array of [3d corner coordinates]
     - optional: img_path: path to image
 
     OUTPUTS:
@@ -869,7 +1244,7 @@ def imgp_objp_visualizer_clicker(img, imgp=[], objp=[], img_path=''):
         '''
         Handles key press events:
         'Y' to return imgp, 'N' to dismiss image, 'C' to click points by hand.
-        Left click to add a point, 'H' to indicate it is not visible, right click to remove the last point.
+        Left click to add a point, 'H' to indicate it is not visible, right click to remove it.
         '''
 
         global imgp_confirmed, objp_confirmed, objp_confirmed_notok, scat, ax_3d, fig_3d, events, count
@@ -907,6 +1282,7 @@ def imgp_objp_visualizer_clicker(img, imgp=[], objp=[], img_path=''):
             if img_for_pointing is None:
                 cap = cv2.VideoCapture(old_image_path)
                 ret, img_for_pointing = cap.read()
+                cap.release()
             img_for_pointing = cv2.cvtColor(img_for_pointing, cv2.COLOR_BGR2RGB)
             ax.imshow(img_for_pointing)
             # To update the image
