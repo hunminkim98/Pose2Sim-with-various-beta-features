@@ -22,7 +22,7 @@ multi_person = false # true for trials with multiple participants. If false, onl
 participant_height = 1.72 # m # float if single person, list of float if multi-person (same order as the Static trials) # Only used for marker augmentation
 participant_mass = 70.0 # kg # Only used for marker augmentation and scaling
 
-frame_rate = 'auto' # fps # int or 'auto'. If 'auto', finds from video (or defaults to 60 fps if you work with images) 
+frame_rate = 240 # fps # int or 'auto'. If 'auto', finds from video (or defaults to 60 fps if you work with images) 
 frame_range = [] # For example [10,300], or [] for all frames. 
 ## If cameras are not synchronized, designates the frame range of the camera with the shortest recording time
 ## N.B.: If you want a time range instead, use frame_range = time_range * frame_rate
@@ -35,7 +35,7 @@ exclude_from_batch = [] # List of trials to be excluded from batch analysis, ['<
 [pose]
 vid_img_extension = 'mp4' # any video or image extension
 pose_model = 'HALPE_26'  #With RTMLib: HALPE_26 (body and feet, default), COCO_133 (body, feet, hands), COCO_17 (body)
-                         # /!\ Only RTMPose is natively embeded in Pose2Sim. For all other pose estimation methods, you will have to run them yourself, and then refer to the documentation to convert the output files if needed
+                         # /!\ Only RTMPose is natively embeded in Pose2Sim. For all other pose estimation methods, you will have to run them yourself, and then refer to the documentation to convert the files if needed
                          #With MMPose: HALPE_26, COCO_133, COCO_17, CUSTOM. See CUSTOM example at the end of the file
                          #With openpose: BODY_25B, BODY_25, BODY_135, COCO, MPII
                          #With mediapipe: BLAZEPOSE
@@ -64,7 +64,7 @@ filter_order = 4
 
 # Take heart, calibration is not that complicated once you get the hang of it!
 [calibration]
-calibration_type = 'convert' # 'convert' or 'calculate'
+calibration_type = 'calculate' # 'convert' or 'calculate'
 
    [calibration.convert]
    convert_from = 'qualisys' # 'caliscope', 'qualisys', 'optitrack', vicon', 'opencap', 'easymocap', 'biocv', 'anipose', or 'freemocap'
@@ -94,6 +94,7 @@ calibration_type = 'convert' # 'convert' or 'calculate'
       [calibration.calculate.extrinsics]
       calculate_extrinsics = true # true or false (lowercase) 
       extrinsics_method = 'scene' # 'board', 'scene', 'keypoints'
+	  bundle_adjustment = true
       # 'board' should be large enough to be detected when laid on the floor. Not recommended.
       # 'scene' involves manually clicking any point of know coordinates on scene. Usually more accurate if points are spread out.
       # 'keypoints' uses automatic pose estimation of a person freely walking and waving arms in the scene. Slighlty less accurate, requires synchronized cameras.
@@ -106,18 +107,22 @@ calibration_type = 'convert' # 'convert' or 'calculate'
          extrinsics_square_size = 60 # mm # [h,w] if square is actually a rectangle
 
          [calibration.calculate.extrinsics.scene]
+		 bundle_adjustment = true
+		 bundle_max_iterations = 2
+		 bundle_convergence_threshold = 1e-6
+		 optimize_points = true
          show_reprojection_error = true # true or false (lowercase)
-         extrinsics_extension = 'png' # any video or image extension
+         extrinsics_extension = 'MP4' # any video or image extension
          # list of 3D coordinates to be manually labelled on images. Can also be a 2 dimensional plane. 
          # in m -> unlike for intrinsics, NOT in mm!
-         object_coords_3d =   [[-2.0,  0.3,  0.0], 
-                              [-2.0 , 0.0,  0.0], 
-                              [-2.0, 0.0,  0.05], 
-                              [-2.0, -0.3 ,  0.0], 
-                              [0.0,  0.3,  0.0], 
-                              [0.0, 0.0,  0.0], 
-                              [0.0, 0.0,  0.05], 
-                              [0.0, -0.3,  0.0]]
+         object_coords_3d =   [[0.0,0.0,0.0],
+		   [0.4,0.0,0.0],
+		   [0.4,0.35,0.0],
+		   [0.0,0.35,0.0],
+		   [0.0,0.0,0.3],
+		   [0.4,0.0,0.3],
+		   [0.4,0.35,0.3],
+		   [0.0,0.35,0.3]]
         
          [calibration.calculate.extrinsics.keypoints]
          # Coming soon!
@@ -148,7 +153,10 @@ fill_large_gaps_with = 'last_value' # 'last_value', 'nan', or 'zeros'
 handle_LR_swap = false # Better if few cameras (eg less than 4) with risk of limb swapping (eg camera facing sagittal plane), otherwise slightly less accurate and slower
 undistort_points = false # Better if distorted image (parallel lines curvy on the edge or at least one param > 10^-2), but unnecessary (and slightly slower) if distortions are low
 make_c3d = true # save triangulated data in c3d format in addition to trc
-
+use_bundle_adjustment = true
+optimize_calibration = true
+bundle_max_iterations = 100
+bundle_convergence_threshold = 1e-4
 
 [filtering]
 type = 'butterworth' # butterworth, kalman, gaussian, LOESS, median, butterworth_on_speed
