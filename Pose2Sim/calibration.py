@@ -48,7 +48,9 @@ from mpl_interactions import zoom_factory, panhandler
 from PIL import Image
 from contextlib import contextmanager,redirect_stderr,redirect_stdout
 from os import devnull
-from .bundle_adjustment import run_bundle_adjustment
+import torch
+from .bundle_adjustment2.api import optimize_calibrated
+from kornia.geometry import rotation_matrix_to_axis_angle
 
 
 ## AUTHORSHIP INFORMATION
@@ -150,8 +152,7 @@ def read_qca(qca_path, binning_factor):
         
         fu = float(tag.get('focalLengthU'))/64/binning_factor \
             / (1080/res[i])
-        fv = float(tag.get('focalLengthV'))/64/binning_factor \
-            / (1080/res[i])
+        fv = fu / float(tag.attrib.get('pixel_aspect_ratio'))
         cu = (float(tag.get('centerPointU'))/64/binning_factor \
             - float(root.findall('cameras/camera/fov_video')[i].attrib.get('left'))) \
             / (1080/res[i])
@@ -244,8 +245,7 @@ def read_qca(qca_path, binning_factor):
         
         fu = float(tag.get('focalLengthU'))/64/binning_factor \
             / (1080/res[i])
-        fv = float(tag.get('focalLengthV'))/64/binning_factor \
-            / (1080/res[i])
+        fv = fu / float(tag.attrib.get('pixel_aspect_ratio'))
         cu = (float(tag.get('centerPointU'))/64/binning_factor \
             - float(root.findall('cameras/camera/fov_video')[i].attrib.get('left'))) \
             / (1080/res[i])
@@ -743,18 +743,19 @@ def calibrate_extrinsics(calib_dir, extrinsics_config_dict, C, S, K, D):
     
     extrinsics_method = extrinsics_config_dict.get('extrinsics_method')
     ret, R, T = [], [], []
+    initial_rms_errors = []  # Store initial RMS errors
     
     if extrinsics_method in {'board', 'scene'}:
                 
         # Define 3D object points
         if extrinsics_method == 'board':
             extrinsics_corners_nb = extrinsics_config_dict.get('board').get('extrinsics_corners_nb')
-            extrinsics_square_size = extrinsics_config_dict.get('board').get('extrinsics_square_size') / 1000 # convert to meters
+            extrinsics_square_size = extrinsics_config_dict.get('board').get('extrinsics_square_size') / 1000  # convert to meters
             object_coords_3d = np.zeros((extrinsics_corners_nb[0] * extrinsics_corners_nb[1], 3), np.float32)
             object_coords_3d[:, :2] = np.mgrid[0:extrinsics_corners_nb[0], 0:extrinsics_corners_nb[1]].T.reshape(-1, 2)
             object_coords_3d[:, :2] = object_coords_3d[:, 0:2] * extrinsics_square_size
         elif extrinsics_method == 'scene':
-            object_coords_3d = np.array(extrinsics_config_dict.get('scene').get('object_coords_3d'), np.float32)
+            object_coords_3d = np.array(extrinsics_config_dict.get('scene').get('object_coords_3d'), np.float32) / 1000  # convert to meters
                 
         # Save reference 3D coordinates as trc
         calib_output_path = os.path.join(calib_dir, f'Object_points.trc')
@@ -857,15 +858,15 @@ def calibrate_extrinsics(calib_dir, extrinsics_config_dict, C, S, K, D):
 
                 if len(objp) < 10:
                     logging.info(f'Only {len(objp)} reference points for camera {cam}. Calibration of extrinsic parameters may not be accurate with fewer than 10 reference points, as spread out in the captured volume as possible.')
-                print(f"camera {cam}'s img points: {imgp}")
+                # print(f"camera {cam}'s img points: {imgp}")
             elif extrinsics_method == 'keypoints':
                 logging.info('Calibration based on keypoints is not available yet.')
             
             # Calculate extrinsics
             mtx, dist = np.array(K[i]), np.array(D[i])
-            _, r, t = cv2.solvePnP(np.array(objp)*1000, imgp, mtx, dist)
+            _, r, t = cv2.solvePnP(np.array(objp)*1000, imgp, mtx, dist)  # Convert to mm for solvePnP
             r, t = r.flatten(), t.flatten()
-            t /= 1000 
+            t /= 1000  # Convert back to meters
 
             # Collect data for bundle adjustment
             camera_params = np.hstack((r, t))
@@ -890,6 +891,7 @@ def calibrate_extrinsics(calib_dir, extrinsics_config_dict, C, S, K, D):
             imgp_to_objreproj_dist = [euclidean_distance(proj_obj[n], imgp[n]) for n in range(len(proj_obj))]
             rms_px = np.sqrt(np.sum([d**2 for d in imgp_to_objreproj_dist]))
             ret.append(rms_px)
+            initial_rms_errors.append(rms_px)  # Store initial RMS errors
             R.append(r)
             T.append(t)
 
@@ -913,89 +915,183 @@ def calibrate_extrinsics(calib_dir, extrinsics_config_dict, C, S, K, D):
             print(f"Total 2D points: {len(all_points_2d)}")
             print(f"Unique camera indices: {np.unique(all_camera_indices)}")
             print(f"Point index range: {all_point_indices.min()} to {all_point_indices.max()}")
-
+            
+            # Debug input data
+            print("\nInput data statistics:")
+            print(f"3D points (objp) range: {np.min(objp)} to {np.max(objp)}")
+            print(f"2D points range: {np.min(all_points_2d)} to {np.max(all_points_2d)}")
+            print(f"Camera rotations range: {np.min(all_camera_params[:, :3])} to {np.max(all_camera_params[:, :3])}")
+            print(f"Camera translations range: {np.min(all_camera_params[:, 3:])} to {np.max(all_camera_params[:, 3:])}")
+            
             # Get bundle adjustment parameters from config
             optimize_points = extrinsics_config_dict.get('scene', {}).get('optimize_points', False)
             max_iterations = extrinsics_config_dict.get('scene', {}).get('bundle_max_iterations', 5)
             convergence_threshold = extrinsics_config_dict.get('scene', {}).get('bundle_convergence_threshold', 1e-6)
             
             # Run global optimization with multiple iterations
-            try:
-                camera_params_opt, points_3d_opt, ba_info = run_bundle_adjustment(
-                    all_camera_params,
-                    np.array(objp),
-                    all_points_2d,
-                    all_camera_indices,
-                    all_point_indices,
-                    all_camera_matrices,
-                    all_dist_coeffs,
-                    optimize_points=optimize_points,
-                    max_iterations=max_iterations,
-                    convergence_threshold=convergence_threshold
-                )
-            except Exception as e:
-                print(f"Warning: Bundle adjustment failed with error: {str(e)}")
-                print("Proceeding with non-optimized parameters...")
-                camera_params_opt = all_camera_params
-                points_3d_opt = np.array(objp)
-                ba_info = None
-
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            dtype = torch.float64
+            
+            # Convert data to torch tensors
+            points_3d_torch = torch.tensor(np.array(objp), dtype=dtype, device=device)
+            observations = []
+            r_0, t_0 = [], []
+            
+            for cam_idx in range(len(all_camera_params)):
+                # Convert rotation to axis angle
+                R, _ = cv2.Rodrigues(all_camera_params[cam_idx, :3])
+                r_aa = rotation_matrix_to_axis_angle(torch.tensor(R, dtype=dtype, device=device)[None])[0]
+                r_0.append(r_aa)
+                t_0.append(torch.tensor(all_camera_params[cam_idx, 3:], dtype=dtype, device=device))
+                
+                # Prepare observations
+                mask = all_camera_indices == cam_idx
+                x_im = torch.tensor(all_points_2d[mask], dtype=dtype, device=device)
+                inds = torch.tensor(all_point_indices[mask], device=device)
+                observations.append((x_im, inds))
+            
+            r_0 = torch.stack(r_0)
+            t_0 = torch.stack(t_0)
+            
+            # Scale 3D points to be roughly in the same range as 2D points
+            scale_factor = 1000  # Convert from meters to millimeters
+            points_3d_torch = torch.tensor(np.array(objp) * scale_factor, dtype=dtype, device=device)
+            observations = []
+            r_0, t_0 = [], []
+            
+            for cam_idx in range(len(all_camera_params)):
+                # Convert rotation vector directly to axis-angle
+                r = torch.tensor(all_camera_params[cam_idx, :3], dtype=dtype, device=device)
+                t = torch.tensor(all_camera_params[cam_idx, 3:] * scale_factor, dtype=dtype, device=device)
+                
+                # Get points for this camera
+                cam_points = all_points_2d[all_camera_indices == cam_idx]
+                point_indices = all_point_indices[all_camera_indices == cam_idx]
+                
+                if len(cam_points) > 0:
+                    observations.append((
+                        torch.tensor(cam_points, dtype=dtype, device=device),
+                        point_indices
+                    ))
+                    r_0.append(r)
+                    t_0.append(t)
+            
+            r_0 = torch.stack(r_0)
+            t_0 = torch.stack(t_0)
+            
+            # Run bundle adjustment
+            X_hat, theta_hat = optimize_calibrated(points_3d_torch, r_0, t_0, observations, 
+                                                 K_list=[torch.tensor(k, dtype=dtype, device=device) for k in K],
+                                                 D_list=[torch.tensor(d, dtype=dtype, device=device) for d in D] if D else None,
+                                                 dtype=dtype, L_0=1e-2, num_steps=max_iterations)
+            
+            # Convert results back to numpy
+            r_hat, t_hat = theta_hat.chunk(2, dim=-1)
+            points_3d_opt = X_hat.cpu().numpy()
+            
+            # Convert axis-angle back to Rodrigues
+            camera_params_opt = np.zeros_like(all_camera_params)
+            for i, r in enumerate(r_hat):
+                camera_params_opt[i, :3] = r.cpu().numpy()  # r_hat is already in axis-angle (Rodrigues) form
+                camera_params_opt[i, 3:] = t_hat[i].cpu().numpy()
+            
+            ba_info = type('', (), {'cost': 0.0})()  # Simple object with cost attribute
+            
             # Initialize lists for storing optimized parameters
             R = []
             T = []
             ret = []
             
-            # Process optimized parameters for each camera
-            for cam_idx in range(len(all_camera_matrices)):
-                # Extract rotation and translation from optimized parameters
-                r_opt = camera_params_opt[cam_idx][:3]
-                t_opt = camera_params_opt[cam_idx][3:6]
+            # Update camera parameters with optimized values
+            for cam_idx in range(len(extrinsics_cam_listdirs_names)):
+                r_opt = camera_params_opt[cam_idx, :3]
+                t_opt = camera_params_opt[cam_idx, 3:6]
                 
                 R.append(r_opt.copy())
                 T.append(t_opt.copy())
                 
-            # Visualize reprojection before and after bundle adjustment if requested
-            if extrinsics_config_dict.get('scene', {}).get('show_reprojection', False):
-                # Get original reprojection
-                orig_proj = []
-                for cam_idx in range(len(all_camera_matrices)):
-                    cam_matrix = all_camera_matrices[cam_idx]
-                    dist_coeffs = all_dist_coeffs[cam_idx]
-                    rvec = all_camera_params[cam_idx][:3]
-                    tvec = all_camera_params[cam_idx][3:6]
-                    points_3d = np.array(objp)
-                    proj, _ = cv2.projectPoints(points_3d, rvec, tvec, cam_matrix, dist_coeffs)
-                    orig_proj.append(proj.reshape(-1, 2))
-
-                # Get optimized reprojection
-                opt_proj = []
-                for cam_idx in range(len(all_camera_matrices)):
-                    cam_matrix = all_camera_matrices[cam_idx]
-                    dist_coeffs = all_dist_coeffs[cam_idx]
-                    rvec = camera_params_opt[cam_idx][:3]
-                    tvec = camera_params_opt[cam_idx][3:6]
-                    points_3d = points_3d_opt if optimize_points else np.array(objp)
-                    proj, _ = cv2.projectPoints(points_3d, rvec, tvec, cam_matrix, dist_coeffs)
-                    opt_proj.append(proj.reshape(-1, 2))
-
-                # Visualize for each camera
-                for cam_idx in range(len(C)):
-                    img_path = os.path.join(calib_dir, 'extrinsics', C[cam_idx], f'frame_0.{extrinsics_extension}')
-                    if os.path.exists(img_path):
-                        visualize_reprojection(img_path, 
-                                            all_points_2d[cam_idx], 
-                                            orig_proj[cam_idx],
-                                            "Before BA")
-                        visualize_reprojection(img_path, 
-                                            all_points_2d[cam_idx], 
-                                            opt_proj[cam_idx],
-                                            "After BA")
+                # Project points using optimized parameters
+                if show_reprojection_error:
+                    # Get camera-specific points
+                    cam_indices = all_camera_indices == cam_idx
+                    cam_points_2d = all_points_2d[cam_indices]
+                    
+                    # Project points
+                    proj_obj_opt = np.squeeze(cv2.projectPoints(
+                        points_3d_opt,
+                        r_opt,
+                        t_opt,
+                        all_camera_matrices[cam_idx],
+                        all_dist_coeffs[cam_idx]
+                    )[0])
+                    
+                    # Debug projection
+                    print(f"\nCamera {cam_idx + 1} projection debug:")
+                    print(f"3D points shape: {points_3d_opt.shape}")
+                    print(f"Projected points shape: {proj_obj_opt.shape}")
+                    print(f"2D points shape: {cam_points_2d.shape}")
+                    print(f"Sample 3D point: {points_3d_opt[0]}")
+                    print(f"Sample projected point: {proj_obj_opt[0]}")
+                    print(f"Sample 2D point: {cam_points_2d[0]}")
+                    
+                    # Calculate error
+                    imgp_to_objreproj_dist = [euclidean_distance(proj_obj_opt[n], cam_points_2d[n]) for n in range(len(proj_obj_opt))]
+                    error = np.sqrt(np.sum([d**2 for d in imgp_to_objreproj_dist]))
+                    ret.append(error)
+                    
+                    # Reshape points for visualization
+                    cam_points_2d = cam_points_2d.reshape(-1, 1, 2)
+                    
+                    # Visualize results
+                    img_file = glob.glob(os.path.join(calib_dir, 'extrinsics', extrinsics_cam_listdirs_names[cam_idx], f'*.{extrinsics_extension}'))[0]
+                    visualize_reprojection(img_file, cam_points_2d, proj_obj_opt, 
+                                         f"After Bundle Adjustment - Camera {cam_idx + 1}")
+                    
+                    logging.info(f'Camera {cam_idx + 1} RMS error after bundle adjustment: {error:.3f} pixels')
+                else:
+                    # If not visualizing, still compute error
+                    cam_indices = all_camera_indices == cam_idx
+                    cam_points_2d = all_points_2d[cam_indices]
+                    proj_obj_opt = np.squeeze(cv2.projectPoints(
+                        points_3d_opt,
+                        r_opt,
+                        t_opt,
+                        all_camera_matrices[cam_idx],
+                        all_dist_coeffs[cam_idx]
+                    )[0])
+                    imgp_to_objreproj_dist = [euclidean_distance(proj_obj_opt[n], cam_points_2d[n]) for n in range(len(proj_obj_opt))]
+                    error = np.sqrt(np.sum([d**2 for d in imgp_to_objreproj_dist]))
+                    ret.append(error)
             
             logging.info(f'Global bundle adjustment completed with final cost: {ba_info.cost}')
             logging.info(f'Average RMS error per point: {np.mean(ret):.3f} pixels')
         
     elif extrinsics_method == 'keypoints':
         raise NotImplementedError('This has not been integrated yet.')
+    
+    # Scale back the results only if bundle adjustment was performed
+    if use_bundle:
+        points_3d_opt = points_3d_opt / scale_factor
+        for i in range(len(r_opt)):
+            t_opt[i] = t_opt[i] / scale_factor
+    
+    # Convert pixel errors to meters
+    pixel_to_meter = [1000 / np.mean([K[i][0,0], K[i][1,1]]) for i in range(len(K))]  # 1000mm = 1m
+    initial_rms_meters = [initial_rms_errors[i] * pixel_to_meter[i] for i in range(len(initial_rms_errors))]
+    final_rms_meters = [ret[i] * pixel_to_meter[i] for i in range(len(ret))]
+    
+    # Format the results for clean output
+    pixel_errors = [f"{err:.3f}" for err in ret]
+    meter_errors = [f"{err:.6f}" for err in final_rms_meters]
+    
+    logging.info("\nCalibration Results Summary:")
+    logging.info("-" * 50)
+    for i in range(len(ret)):
+        logging.info(f"Camera {i+1}:")
+        logging.info(f"  Initial error: {initial_rms_errors[i]:.3f} px ({initial_rms_meters[i]:.6f} m)")
+        logging.info(f"  Final error:   {float(pixel_errors[i]):.3f} px ({float(meter_errors[i]):.6f} m)")
+    logging.info("-" * 50)
+    logging.info(f"Average final error: {np.mean(ret):.3f} px ({np.mean(final_rms_meters):.6f} m)")
     
     return ret, C, S, D, K, R, T
 
@@ -1105,7 +1201,7 @@ def imgp_objp_visualizer_clicker(img, imgp=[], objp=[], img_path=''):
         '''
         Handles key press events:
         'Y' to return imgp, 'N' to dismiss image, 'C' to click points by hand.
-        Left click to add a point, 'H' to indicate it is not visible, right click to remove it.
+        Left click to add a point, 'H' to indicate it is not visible, right click to remove the last point.
         '''
 
         global imgp_confirmed, objp_confirmed, objp_confirmed_notok, scat, ax_3d, fig_3d, events, count
@@ -1614,7 +1710,7 @@ def visualize_reprojection(img_path, imgp, proj_obj, title_prefix=""):
         if res == False:
             raise
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
+    
     # Draw points
     for o in proj_obj:
         cv2.circle(img, (int(o[0]), int(o[1])), 8, (0,0,255), -1) 

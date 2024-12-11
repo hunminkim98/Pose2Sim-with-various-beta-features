@@ -49,12 +49,13 @@ from collections import Counter
 from anytree import RenderTree
 from anytree.importer import DictImporter
 import logging
+from .bundle_adjustment2.api import calibrated_residuals
 
 from Pose2Sim.common import retrieve_calib_params, computeP, weighted_triangulation, \
     reprojection, euclidean_distance, sort_people_sports2d, \
     sort_stringlist_by_last_number, min_with_single_indices, zup2yup, convert_to_c3d
 from Pose2Sim.skeletons import *
-
+import torch
 
 ## AUTHORSHIP INFORMATION
 __author__ = "David Pagnon"
@@ -136,6 +137,10 @@ def make_trc(config_dict, Q, keypoints_names, f_range, id_person=-1):
 
     # Read config_dict
     project_dir = config_dict.get('project').get('project_dir')
+    # if batch
+    session_dir = os.path.realpath(os.path.join(project_dir, '..'))
+    # if single trial
+    session_dir = session_dir if 'Config.toml' in os.listdir(session_dir) else os.getcwd()
     multi_person = config_dict.get('project').get('multi_person')
     if multi_person:
         seq_name = f'{os.path.basename(os.path.realpath(project_dir))}_P{id_person+1}'
@@ -225,7 +230,7 @@ def retrieve_right_trc_order(trc_paths):
     return trc_id
 
 
-def recap_triangulate(config_dict, error, nb_cams_excluded, keypoints_names, cam_excluded_count, interp_frames, non_interp_frames, trc_path):
+def recap_triangulate(config_dict, error, nb_cams_excluded, keypoints_names, cam_excluded_count, interp_frames, non_interp_frames, trc_path, bundle_error=None):
     '''
     Print a message giving statistics on reprojection errors (in pixel and in m)
     as well as the number of cameras that had to be excluded to reach threshold 
@@ -322,6 +327,9 @@ def recap_triangulate(config_dict, error, nb_cams_excluded, keypoints_names, cam
         logging.info('All trc files have been converted to c3d.')
     logging.info(f'Limb swapping was {"handled" if handle_LR_swap else "not handled"}.')
     logging.info(f'Lens distortions were {"taken into account" if undistort_points else "not taken into account"}.')
+
+    if bundle_error is not None:
+        logging.info(f'\nBundle adjustment reprojection error: {bundle_error:.3f} pixels')
 
 
 def triangulation_from_best_cameras(config_dict, coords_2D_kpt, coords_2D_kpt_swapped, projection_matrices, calib_params):
@@ -468,7 +476,6 @@ def triangulation_from_best_cameras(config_dict, coords_2D_kpt, coords_2D_kpt_sw
         
         Q = Q_filt[best_cams][:-1]
 
-
         # Swap left and right sides if reprojection error still too high
         if handle_LR_swap and error_min > error_threshold_triangulation:
             # print('handle')
@@ -578,7 +585,7 @@ def extract_files_frame_f(json_tracked_files_f, keypoints_ids, nb_persons_to_det
     - keypoints_ids: list of int. Keypoints IDs in the order of the hierarchy.
     - nb_persons_to_detect: int
 
-    OUTPUTS:
+    OUTPUT:
     - x_files, y_files, likelihood_files: [[[list of coordinates] * n_cams ] * nb_persons_to_detect]
     '''
 
@@ -654,7 +661,9 @@ def triangulate_all(config_dict):
     show_interp_indices = config_dict.get('triangulation').get('show_interp_indices')
     undistort_points = config_dict.get('triangulation').get('undistort_points')
     make_c3d = config_dict.get('triangulation').get('make_c3d')
-    
+    bundle_adjustment = config_dict.get('triangulation').get('use_bundle_adjustment')
+    bundle_max_iterations = config_dict.get('triangulation').get('bundle_max_iterations')
+
     try:
         calib_dir = [os.path.join(session_dir, c) for c in os.listdir(session_dir) if os.path.isdir(os.path.join(session_dir, c)) and  'calib' in c.lower()][0]
     except:
@@ -732,6 +741,26 @@ def triangulate_all(config_dict):
     else:
         nb_persons_to_detect = 1
 
+    # Initialize data structures for all frames
+    x_files_all_frames = []
+    y_files_all_frames = []
+    likelihood_files_all_frames = []
+    
+    for n in range(nb_persons_to_detect):
+        x_files_person = []
+        y_files_person = []
+        likelihood_files_person = []
+        for c in range(n_cams):
+            x_files_cam = [[] for _ in range(len(keypoints_names))]  # Initialize empty lists for each keypoint
+            y_files_cam = [[] for _ in range(len(keypoints_names))]
+            likelihood_files_cam = [[] for _ in range(len(keypoints_names))]
+            x_files_person.append(x_files_cam)
+            y_files_person.append(y_files_cam)
+            likelihood_files_person.append(likelihood_files_cam)
+        x_files_all_frames.append(x_files_person)
+        y_files_all_frames.append(y_files_person)
+        likelihood_files_all_frames.append(likelihood_files_person)
+
     Q = [[[np.nan]*3]*keypoints_nb for n in range(nb_persons_to_detect)]
     Q_old = [[[np.nan]*3]*keypoints_nb for n in range(nb_persons_to_detect)]
     error = [[] for n in range(nb_persons_to_detect)]
@@ -748,6 +777,14 @@ def triangulate_all(config_dict):
         x_files, y_files, likelihood_files = extract_files_frame_f(json_files_f, keypoints_ids, nb_persons_to_detect)
         # [[[list of coordinates] * n_cams ] * nb_persons_to_detect]
         # vs. [[list of coordinates] * n_cams ] 
+        
+        # Accumulate data for all frames
+        for n in range(nb_persons_to_detect):
+            for cam_idx in range(n_cams):
+                for k_idx in range(len(keypoints_names)):
+                    x_files_all_frames[n][cam_idx][k_idx].append(x_files[n][cam_idx][k_idx])
+                    y_files_all_frames[n][cam_idx][k_idx].append(y_files[n][cam_idx][k_idx])
+                    likelihood_files_all_frames[n][cam_idx][k_idx].append(likelihood_files[n][cam_idx][k_idx])
         
         # undistort points
         if undistort_points:
@@ -884,6 +921,159 @@ def triangulate_all(config_dict):
         for n in range(nb_persons_to_detect): 
             Q_tot[n].replace(np.nan, 0, inplace=True)
     
+    if bundle_adjustment:
+        # 번들 조정 시작
+        import logging
+        logging.info('\n\nStarting bundle adjustment...')
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        dtype = torch.float64
+
+        Ks = [torch.tensor(k, dtype=dtype, device=device) for k in calib_params['K']]
+        Ds = [torch.tensor(d, dtype=dtype, device=device) for d in calib_params['dist']]
+
+        # R, T를 Rodrigues 벡터 형태로 변환
+        r_0_list = []
+        t_0_list = []
+        for i in range(len(calib_params['R'])):
+            R_mat = np.array(calib_params['R'][i])
+            
+            try:
+                if R_mat.shape == (3,):
+                    # 이미 Rodrigues 벡터인 경우
+                    rvec = R_mat
+                else:
+                    # 3x3 회전 행렬인 경우
+                    R_mat = R_mat.reshape(3, 3)
+                    rvec, _ = cv2.Rodrigues(R_mat)
+               
+                if len(rvec.shape) > 1:
+                    rvec = rvec.flatten()
+                r_0_list.append(rvec)
+                t_0_list.append(np.array(calib_params['T'][i]))
+            except Exception as e:
+                logging.error(f"Error processing camera {i}")
+                logging.error(f"Error details: {str(e)}")
+                raise
+
+        # 모든 카메라의 r_0와 t_0를 올바른 형태로 변환
+        r_0 = torch.tensor(np.array(r_0_list), dtype=dtype, device=device)  # (M,3)
+        t_0 = torch.tensor(np.array(t_0_list), dtype=dtype, device=device)  # (M,3)
+
+        # 각 인물에 대해 번들 조정 수행
+        for n in range(nb_persons_to_detect):
+            frame_nb = Q_tot[n].shape[0]  # 프레임 수
+            keypoints_nb = len(keypoints_names)
+
+            # Q_tot[n]은 frame_nb x (keypoints_nb*3) 형태 -> (N,3)로 reshape
+            X_0_np = Q_tot[n].values.reshape(-1,3)
+            X_0 = torch.tensor(X_0_np, dtype=dtype, device=device)
+
+            # 번들 조정을 위한 2D 관측점 준비
+            observations = []
+            for cam_idx in range(len(Ks)):
+                cam_points = []
+                cam_inds = []          
+
+                for k_idx in range(keypoints_nb):                 
+                    for f_idx in range(frame_nb):
+                        global_idx = f_idx * keypoints_nb + k_idx
+                        try:
+                            x_val = x_files_all_frames[n][cam_idx][k_idx][f_idx]
+                            y_val = y_files_all_frames[n][cam_idx][k_idx][f_idx]
+                            if not np.isnan(x_val) and not np.isnan(y_val):
+                                cam_points.append([x_val, y_val])
+                                cam_inds.append(global_idx)
+                        except Exception as e:
+                            logging.error(f"Error accessing point data: n={n}, cam_idx={cam_idx}, k_idx={k_idx}, f_idx={f_idx}")
+                            logging.error(f"Error details: {str(e)}")
+                            raise
+                
+                if len(cam_points) > 0:
+                    points_tensor = torch.tensor(cam_points, dtype=dtype, device=device)
+                    inds_tensor = torch.tensor(cam_inds, device=device)
+                    observations.append((points_tensor, inds_tensor))
+                    # logging.info(f"Camera {cam_idx} observations: points shape {points_tensor.shape}, indices shape {inds_tensor.shape}")
+
+            # 번들 조정 실행
+            from .bundle_adjustment2.api import optimize_calibrated        
+            try:
+                X_hat, theta_hat = optimize_calibrated(X_0, r_0, t_0, observations,
+                                                    K_list=Ks, D_list=Ds,
+                                                    dtype=dtype, L_0=1e-2, num_steps=bundle_max_iterations)
+                # logging.info(f"Optimization successful. X_hat shape: {X_hat.shape}, theta_hat shape: {theta_hat.shape}")
+            except Exception as e:
+                logging.error("Bundle adjustment failed")
+                logging.error(f"Error details: {str(e)}")
+                raise
+
+            # 개선된 3D 점을 Q_tot에 반영
+            X_hat_np = X_hat.cpu().numpy()
+            X_hat_reshaped = X_hat_np.reshape(frame_nb, keypoints_nb*3)
+            Q_tot[n].iloc[:, :] = X_hat_reshaped
+
+            # 번들 조정 후의 카메라 파라미터 저장
+            if n == 0:  # 첫 번째 인물에 대해서만 저장
+                from .calibration import toml_write
+                r_new = theta_hat[:, :3].cpu().numpy()  # 새로운 회전 벡터
+                t_new = theta_hat[:, 3:].cpu().numpy()  # 새로운 translation 벡터
+                
+                # 기존 카메라 정보 가져오기 (S, C는 변경되지 않음)
+                S = [[k[1, 1], k[0, 0]] for k in Ks]  # 이미지 크기
+                C = [f'Camera{i+1}' for i in range(len(Ks))]  # 카메라 이름
+                K = [k.cpu().numpy() for k in Ks]  # 내부 파라미터
+                D = [d.cpu().numpy() for d in Ds]  # 왜곡 계수
+                
+                # 번들 조정 결과를 새로운 toml 파일로 저장
+                calib_path = os.path.splitext(calib_file)[0] + '_bundle_adjusted.toml'
+                toml_write(calib_path, C, S, D, K, r_new, t_new)
+
+            # 번들 조정 후의 재투영 오차 계산
+            if n == 0:  # 첫 번째 인물에 대해서만 계산
+                bundle_errors = []  # 각 키포인트별 재투영 오차를 저장할 리스트
+                bundle_cams_excluded = []  # 각 키포인트별 제외된 카메라 수
+                
+                for cam_idx, (points, inds) in enumerate(observations):
+                    # 3D 점들을 2D로 재투영
+                    X_points = X_hat[inds]
+                    r = theta_hat[cam_idx, :3]
+                    t = theta_hat[cam_idx, 3:]
+                    K = Ks[cam_idx]
+                    D = Ds[cam_idx]
+                    
+                    proj_points = calibrated_residuals(X_points, torch.cat([r, t]), points, K, D) + points
+                    # 재투영 오차 계산 (유클리디안 거리)
+                    errors = torch.norm(proj_points - points, dim=1)
+                    
+                    # 각 키포인트별 오차 저장
+                    for idx, error in enumerate(errors):
+                        if len(bundle_errors) <= idx:
+                            bundle_errors.append([])
+                            bundle_cams_excluded.append(0)  # 카메라 제외 수 초기화
+                        bundle_errors[idx].append(error.item())
+                
+                # 각 키포인트별 평균 재투영 오차 계산
+                mean_bundle_errors = [np.mean(errors) for errors in bundle_errors]
+                
+                # error_tot 업데이트 - 번들 조정 후의 결과로
+                for col_idx, error in enumerate(mean_bundle_errors):
+                    if col_idx < len(error_tot[n].columns) - 1:  # 'mean' 열 제외
+                        error_tot[n].iloc[0, col_idx] = error
+                
+                # 전체 평균 업데이트
+                error_tot[n].iloc[0, -1] = np.mean(mean_bundle_errors)  # 마지막 열이 'mean'
+                
+                # nb_cams_excluded_tot 업데이트 - 모든 카메라가 사용되므로 0으로 설정
+                for col_idx in range(len(nb_cams_excluded_tot[n].columns) - 1):  # 'mean' 열 제외
+                    nb_cams_excluded_tot[n].iloc[0, col_idx] = 0
+                nb_cams_excluded_tot[n].iloc[0, -1] = 0  # 평균도 0
+                
+                logging.info(f'\nBundle adjustment mean reprojection error: {error_tot[n].iloc[0, -1]:.3f} pixels')
+
+            # 개선된 3D 점을 Q_tot에 반영
+            X_hat_np = X_hat.cpu().numpy()
+            X_hat_reshaped = X_hat_np.reshape(frame_nb, keypoints_nb*3)
+            Q_tot[n].iloc[:, :] = X_hat_reshaped
+
     # Create TRC file
     trc_paths = [make_trc(config_dict, Q_tot[n], keypoints_names, f_range, id_person=n) for n in range(len(Q_tot))]
     if make_c3d:

@@ -94,7 +94,7 @@ calibration_type = 'calculate' # 'convert' or 'calculate'
       [calibration.calculate.extrinsics]
       calculate_extrinsics = true # true or false (lowercase) 
       extrinsics_method = 'scene' # 'board', 'scene', 'keypoints'
-	  bundle_adjustment = true
+	  bundle_adjustment = false
       # 'board' should be large enough to be detected when laid on the floor. Not recommended.
       # 'scene' involves manually clicking any point of know coordinates on scene. Usually more accurate if points are spread out.
       # 'keypoints' uses automatic pose estimation of a person freely walking and waving arms in the scene. Slighlty less accurate, requires synchronized cameras.
@@ -107,10 +107,10 @@ calibration_type = 'calculate' # 'convert' or 'calculate'
          extrinsics_square_size = 60 # mm # [h,w] if square is actually a rectangle
 
          [calibration.calculate.extrinsics.scene]
-		 bundle_adjustment = true
-		 bundle_max_iterations = 2
-		 bundle_convergence_threshold = 1e-6
-		 optimize_points = true
+		 bundle_adjustment = false
+		 bundle_max_iterations = 1000
+		 bundle_convergence_threshold = 1e-15
+		 optimize_points = false
          show_reprojection_error = true # true or false (lowercase)
          extrinsics_extension = 'MP4' # any video or image extension
          # list of 3D coordinates to be manually labelled on images. Can also be a 2 dimensional plane. 
@@ -142,7 +142,7 @@ calibration_type = 'calculate' # 'convert' or 'calculate'
 
 
 [triangulation]
-reproj_error_threshold_triangulation = 15 # px
+reproj_error_threshold_triangulation = 100 # px
 likelihood_threshold_triangulation= 0.3
 min_cameras_for_triangulation = 2
 interpolation = 'linear' #linear, slinear, quadratic, cubic, or none
@@ -155,7 +155,7 @@ undistort_points = false # Better if distorted image (parallel lines curvy on th
 make_c3d = true # save triangulated data in c3d format in addition to trc
 use_bundle_adjustment = true
 optimize_calibration = true
-bundle_max_iterations = 100
+bundle_max_iterations = 1000
 bundle_convergence_threshold = 1e-4
 
 [filtering]
