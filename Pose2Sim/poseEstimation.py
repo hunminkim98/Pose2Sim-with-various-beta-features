@@ -36,13 +36,11 @@ import os
 import glob
 import json
 import logging
-import itertools as it
 from tqdm import tqdm
-import numpy as np
 import cv2
 
 from rtmlib import PoseTracker, Body, Wholebody, BodyWithFeet, draw_skeleton
-from Pose2Sim.common import natural_sort_key, min_with_single_indices, euclidean_distance
+from Pose2Sim.common import natural_sort_key, sort_people_sports2d
 
 
 ## AUTHORSHIP INFORMATION
@@ -57,6 +55,48 @@ __status__ = "Development"
 
 
 ## FUNCTIONS
+def setup_backend_device():
+    '''
+    Set up the backend and device for the pose tracker based on the availability of hardware acceleration.
+    TensorRT is not supported by RTMLib yet: https://github.com/Tau-J/rtmlib/issues/12
+
+    Selects the best option in the following order of priority:
+    1. GPU with CUDA and ONNXRuntime backend (if CUDAExecutionProvider is available)
+    2. GPU with ROCm and ONNXRuntime backend (if ROCMExecutionProvider is available, for AMD GPUs)
+    3. GPU with MPS or CoreML and ONNXRuntime backend (for macOS systems)
+    4. CPU with OpenVINO backend (default fallback)
+    '''
+
+    try:
+        import torch
+        import onnxruntime as ort
+        if torch.cuda.is_available() == True and 'CUDAExecutionProvider' in ort.get_available_providers():
+            device = 'cuda'
+            backend = 'onnxruntime'
+            logging.info(f"\nValid CUDA installation found: using ONNXRuntime backend with GPU.")
+        elif torch.cuda.is_available() == True and 'ROCMExecutionProvider' in ort.get_available_providers():
+            device = 'rocm'
+            backend = 'onnxruntime'
+            logging.info(f"\nValid ROCM installation found: using ONNXRuntime backend with GPU.")
+        else:
+            raise 
+    except:
+        try:
+            import onnxruntime as ort
+            if 'MPSExecutionProvider' in ort.get_available_providers() or 'CoreMLExecutionProvider' in ort.get_available_providers():
+                device = 'mps'
+                backend = 'onnxruntime'
+                logging.info(f"\nValid MPS installation found: using ONNXRuntime backend with GPU.")
+            else:
+                raise
+        except:
+            device = 'cpu'
+            backend = 'openvino'
+            logging.info(f"\nNo valid CUDA installation found: using OpenVINO backend with CPU.")
+    
+    return backend, device
+
+
 def save_to_openpose(json_file_path, keypoints, scores):
     '''
     Save the keypoints and scores to a JSON file in the OpenPose format
@@ -98,62 +138,6 @@ def save_to_openpose(json_file_path, keypoints, scores):
     if not os.path.isdir(json_output_dir): os.makedirs(json_output_dir)
     with open(json_file_path, 'w') as json_file:
         json.dump(json_output, json_file)
-
-   
-def sort_people_sports2d(keyptpre, keypt, scores):
-    '''
-    Associate persons across frames (Pose2Sim method)
-    Persons' indices are sometimes swapped when changing frame
-    A person is associated to another in the next frame when they are at a small distance
-    
-    N.B.: Requires min_with_single_indices and euclidian_distance function (see common.py)
-
-    INPUTS:
-    - keyptpre: array of shape K, L, M with K the number of detected persons,
-    L the number of detected keypoints, M their 2D coordinates
-    - keypt: idem keyptpre, for current frame
-    - score: array of shape K, L with K the number of detected persons,
-    L the confidence of detected keypoints
-    
-    OUTPUTS:
-    - sorted_prev_keypoints: array with reordered persons with values of previous frame if current is empty
-    - sorted_keypoints: array with reordered persons
-    - sorted_scores: array with reordered scores
-    '''
-    
-    # Generate possible person correspondences across frames
-    if len(keyptpre) < len(keypt):
-        keyptpre = np.concatenate((keyptpre, np.full((len(keypt)-len(keyptpre), keypt.shape[1], 2), np.nan)))
-    if len(keypt) < len(keyptpre):
-        keypt = np.concatenate((keypt, np.full((len(keyptpre)-len(keypt), keypt.shape[1], 2), np.nan)))
-        scores = np.concatenate((scores, np.full((len(keyptpre)-len(scores), scores.shape[1]), np.nan)))
-    personsIDs_comb = sorted(list(it.product(range(len(keyptpre)), range(len(keypt)))))
-    
-    # Compute distance between persons from one frame to another
-    frame_by_frame_dist = []
-    for comb in personsIDs_comb:
-        frame_by_frame_dist += [euclidean_distance(keyptpre[comb[0]],keypt[comb[1]])]
-    frame_by_frame_dist = np.mean(frame_by_frame_dist, axis=1)
-    
-    # Sort correspondences by distance
-    _, _, associated_tuples = min_with_single_indices(frame_by_frame_dist, personsIDs_comb)
-    
-    # Associate points to same index across frames, nan if no correspondence
-    sorted_keypoints, sorted_scores = [], []
-    for i in range(len(keyptpre)):
-        id_in_old =  associated_tuples[:,1][associated_tuples[:,0] == i].tolist()
-        if len(id_in_old) > 0:
-            sorted_keypoints += [keypt[id_in_old[0]]]
-            sorted_scores += [scores[id_in_old[0]]]
-        else:
-            sorted_keypoints += [keypt[i]]
-            sorted_scores += [scores[i]]
-    sorted_keypoints, sorted_scores = np.array(sorted_keypoints), np.array(sorted_scores)
-
-    # Keep track of previous values even when missing for more than one frame
-    sorted_prev_keypoints = np.where(np.isnan(sorted_keypoints) & ~np.isnan(keyptpre), keyptpre, sorted_keypoints)
-    
-    return sorted_prev_keypoints, sorted_keypoints, sorted_scores
 
 
 def process_video(video_path, pose_tracker, output_format, save_video, save_images, display_detection, frame_range, multi_person):
@@ -217,7 +201,7 @@ def process_video(video_path, pose_tracker, output_format, save_video, save_imag
                 # Tracking people IDs across frames
                 if multi_person:
                     if 'prev_keypoints' not in locals(): prev_keypoints = keypoints
-                    prev_keypoints, keypoints, scores = sort_people_sports2d(prev_keypoints, keypoints, scores)
+                    prev_keypoints, keypoints, scores = sort_people_sports2d(prev_keypoints, keypoints, scores=scores)
            
                 # Save to json
                 if 'openpose' in output_format:
@@ -400,34 +384,10 @@ def rtm_estimator(config_dict):
         except:
             frame_rate = 30
 
-    # If CUDA is available, use it with ONNXRuntime backend; else use CPU with openvino
-    try:
-        import torch
-        import onnxruntime as ort
-        if torch.cuda.is_available() and 'CUDAExecutionProvider' in ort.get_available_providers():
-            device = 'cuda'
-            backend = 'onnxruntime'
-            logging.info(f"\nValid CUDA installation found: using ONNXRuntime backend with GPU.")
-        elif torch.cuda.is_available() == True and 'ROCMExecutionProvider' in ort.get_available_providers():
-            device = 'rocm'
-            backend = 'onnxruntime'
-            logging.info(f"\nValid ROCM installation found: using ONNXRuntime backend with GPU.")
-        else:
-            raise 
-    except:
-        try:
-            import onnxruntime as ort
-            if 'MPSExecutionProvider' in ort.get_available_providers() or 'CoreMLExecutionProvider' in ort.get_available_providers():
-                device = 'mps'
-                backend = 'onnxruntime'
-                logging.info(f"\nValid MPS installation found: using ONNXRuntime backend with GPU.")
-            else:
-                raise
-        except:
-            device = 'cpu'
-            backend = 'openvino'
-            logging.info(f"\nNo valid CUDA installation found: using OpenVINO backend with CPU.")
+    # Select device and backend
+    backend, device = setup_backend_device()
 
+    # Set detection frequency
     if det_frequency>1:
         logging.info(f'Inference run only every {det_frequency} frames. Inbetween, pose estimation tracks previously detected points.')
     elif det_frequency==1:

@@ -44,9 +44,8 @@ from anytree import PreOrderIter
 
 import opensim
 
-from Pose2Sim.common import natural_sort_key, euclidean_distance, trimmed_mean
+from Pose2Sim.common import natural_sort_key, euclidean_distance, trimmed_mean, points_to_angles
 from Pose2Sim.skeletons import *
-
 
 
 ## AUTHORSHIP INFORMATION
@@ -58,6 +57,44 @@ __version__ = "0.10.0"
 __maintainer__ = "David Pagnon"
 __email__ = "contact@david-pagnon.com"
 __status__ = "Development"
+
+
+## CONSTANTS
+angle_dict = { # lowercase!
+    # joint angles
+    'right ankle': [['RKnee', 'RAnkle', 'RBigToe', 'RHeel'], 'dorsiflexion', 90, 1],
+    'left ankle': [['LKnee', 'LAnkle', 'LBigToe', 'LHeel'], 'dorsiflexion', 90, 1],
+    'right knee': [['RAnkle', 'RKnee', 'RHip'], 'flexion', -180, 1],
+    'left knee': [['LAnkle', 'LKnee', 'LHip'], 'flexion', -180, 1],
+    'right hip': [['RKnee', 'RHip', 'Hip', 'Neck'], 'flexion', 0, -1],
+    'left hip': [['LKnee', 'LHip', 'Hip', 'Neck'], 'flexion', 0, -1],
+    # 'lumbar': [['Neck', 'Hip', 'RHip', 'LHip'], 'flexion', -180, -1],
+    # 'neck': [['Head', 'Neck', 'RShoulder', 'LShoulder'], 'flexion', -180, -1],
+    'right shoulder': [['RElbow', 'RShoulder', 'Hip', 'Neck'], 'flexion', 0, -1],
+    'left shoulder': [['LElbow', 'LShoulder', 'Hip', 'Neck'], 'flexion', 0, -1],
+    'right elbow': [['RWrist', 'RElbow', 'RShoulder'], 'flexion', 180, -1],
+    'left elbow': [['LWrist', 'LElbow', 'LShoulder'], 'flexion', 180, -1],
+    'right wrist': [['RElbow', 'RWrist', 'RIndex'], 'flexion', -180, 1],
+    'left wrist': [['LElbow', 'LIndex', 'LWrist'], 'flexion', -180, 1],
+
+    # segment angles
+    'right foot': [['RBigToe', 'RHeel'], 'horizontal', 0, -1],
+    'left foot': [['LBigToe', 'LHeel'], 'horizontal', 0, -1],
+    'right shank': [['RAnkle', 'RKnee'], 'horizontal', 0, -1],
+    'left shank': [['LAnkle', 'LKnee'], 'horizontal', 0, -1],
+    'right thigh': [['RKnee', 'RHip'], 'horizontal', 0, -1],
+    'left thigh': [['LKnee', 'LHip'], 'horizontal', 0, -1],
+    'pelvis': [['LHip', 'RHip'], 'horizontal', 0, -1],
+    'trunk': [['Neck', 'Hip'], 'horizontal', 0, -1],
+    'shoulders': [['LShoulder', 'RShoulder'], 'horizontal', 0, -1],
+    'head': [['Head', 'Neck'], 'horizontal', 0, -1],
+    'right arm': [['RElbow', 'RShoulder'], 'horizontal', 0, -1],
+    'left arm': [['LElbow', 'LShoulder'], 'horizontal', 0, -1],
+    'right forearm': [['RWrist', 'RElbow'], 'horizontal', 0, -1],
+    'left forearm': [['LWrist', 'LElbow'], 'horizontal', 0, -1],
+    'right hand': [['RIndex', 'RWrist'], 'horizontal', 0, -1],
+    'left hand': [['LIndex', 'LWrist'], 'horizontal', 0, -1]
+    }
 
 
 ## FUNCTIONS
@@ -75,11 +112,11 @@ def read_trc(trc_path):
     try:
         with open(trc_path, 'r') as trc_file:
             header = [next(trc_file) for _ in range(5)]
-        markers = header[3].split('\t')[2::3][:-1]
+        markers = header[3].split('\t')[2::3]
         
         trc_df = pd.read_csv(trc_path, sep="\t", skiprows=4, encoding='utf-8')
         frames_col, time_col = trc_df.iloc[:, 0], trc_df.iloc[:, 1]
-        Q_coords = trc_df.drop(trc_df.columns[[0, 1, -1]], axis=1)
+        Q_coords = trc_df.drop(trc_df.columns[[0, 1]], axis=1)
 
         return Q_coords, frames_col, time_col, markers, header
     
@@ -214,7 +251,7 @@ def get_IK_Setup(model_name, osim_setup_dir):
     elif model_name == 'COCO_17':
         ik_setup_file = 'IK_Setup_Pose2Sim_Coco17.xml'
     elif model_name == 'LSTM':
-        ik_setup_file = 'IK_Setup_Pose2Sim_LSTM.xml'
+        ik_setup_file = 'IK_Setup_Pose2Sim_withHands_LSTM.xml'
     else:
         raise ValueError(f"Pose model '{model_name}' not found.")
 
@@ -260,6 +297,138 @@ def get_kpt_pairs_from_scaling(scaling_root):
              for pair in scaling_root[0].findall(".//MarkerPair")]
 
     return pairs
+
+
+def mean_angles(Q_coords, markers, ang_to_consider = ['right knee', 'left knee', 'right hip', 'left hip']):
+    '''
+    Compute the mean angle time series from 3D points for a given list of angles.
+
+    INPUTS:
+    - Q_coords (DataFrame): The triangulated coordinates of the markers.
+    - markers (list): The list of marker names.
+    - ang_to_consider (list): The list of angles to consider (requires angle_dict).
+
+    OUTPUTS:
+    - ang_mean: The mean angle time series.
+    '''
+
+    ang_to_consider = ['right knee', 'left knee', 'right hip', 'left hip']
+
+    angs = []
+    for ang_name in ang_to_consider:
+        ang_params = angle_dict[ang_name]
+        ang_mk = ang_params[0]
+        
+        pts_for_angles = []
+        for pt in ang_mk:
+            pts_for_angles.append(Q_coords.iloc[:,markers.index(pt)*3:markers.index(pt)*3+3])
+        ang = points_to_angles(pts_for_angles)
+
+        ang += ang_params[2]
+        ang *= ang_params[3]
+        ang = np.abs(ang)
+
+        angs.append(ang)
+
+    ang_mean = np.mean(angs, axis=0)
+
+    return ang_mean
+
+
+def best_coords_for_measurements(Q_coords, keypoints_names, fastest_frames_to_remove_percent=0.2, close_to_zero_speed=0.2, large_hip_knee_angles=45):
+    '''
+    Compute the best coordinates for measurements, after removing:
+    - 20% fastest frames (may be outliers)
+    - frames when speed is close to zero (person is out of frame): 0.2 m/frame, or 50 px/frame
+    - frames when hip and knee angle below 45° (imprecise coordinates when person is crouching)
+    
+    INPUTS:
+    - Q_coords: pd.DataFrame. The XYZ coordinates of each marker
+    - keypoints_names: list. The list of marker names
+    - fastest_frames_to_remove_percent: float
+    - close_to_zero_speed: float (sum for all keypoints: about 50 px/frame or 0.2 m/frame)
+    - large_hip_knee_angles: int
+    - trimmed_extrema_percent
+
+    OUTPUT:
+    - Q_coords_low_speeds_low_angles: pd.DataFrame. The best coordinates for measurements
+    '''
+
+    # Add Hip column if not present
+    n_markers_init = len(keypoints_names)
+    if 'Hip' not in keypoints_names:
+        RHip_df = Q_coords.iloc[:,keypoints_names.index('RHip')*3:keypoints_names.index('RHip')*3+3]
+        LHip_df = Q_coords.iloc[:,keypoints_names.index('LHip')*3:keypoints_names.index('RHip')*3+3]
+        Hip_df = RHip_df.add(LHip_df, fill_value=0) /2
+        Hip_df.columns = [col+ str(int(Q_coords.columns[-1][1:])+1) for col in ['X','Y','Z']]
+        keypoints_names += ['Hip']
+        Q_coords = pd.concat([Q_coords, Hip_df], axis=1)
+    n_markers = len(keypoints_names)
+
+    # Using 80% slowest frames
+    sum_speeds = pd.Series(np.nansum([np.linalg.norm(Q_coords.iloc[:,kpt:kpt+3].diff(), axis=1) for kpt in range(n_markers)], axis=0))
+    sum_speeds = sum_speeds[sum_speeds>close_to_zero_speed] # Removing when speeds close to zero (out of frame)
+    min_speed_indices = sum_speeds.abs().nsmallest(int(len(sum_speeds) * (1-fastest_frames_to_remove_percent))).index
+    Q_coords_low_speeds = Q_coords.iloc[min_speed_indices].reset_index(drop=True)    
+    
+    # Only keep frames with hip and knee flexion angles below 45% 
+    # (if more than 50 of them, else take 50 smallest values)
+    ang_mean = mean_angles(Q_coords_low_speeds, keypoints_names, ang_to_consider = ['right knee', 'left knee', 'right hip', 'left hip'])
+    Q_coords_low_speeds_low_angles = Q_coords_low_speeds[ang_mean < large_hip_knee_angles]
+    if len(Q_coords_low_speeds_low_angles) < 50:
+        Q_coords_low_speeds_low_angles = Q_coords_low_speeds.iloc[pd.Series(ang_mean).nsmallest(50).index]
+
+    if n_markers_init < n_markers:
+        Q_coords_low_speeds_low_angles = Q_coords_low_speeds_low_angles.iloc[:,:-3]
+
+    return Q_coords_low_speeds_low_angles
+
+
+def compute_height(Q_coords, keypoints_names, fastest_frames_to_remove_percent=0.1, close_to_zero_speed=50, large_hip_knee_angles=45, trimmed_extrema_percent=0.5):
+    '''
+    Compute the height of the person from the trc data.
+
+    INPUTS:
+    - Q_coords: pd.DataFrame. The XYZ coordinates of each marker
+    - keypoints_names: list. The list of marker names
+    - fastest_frames_to_remove_percent: float. Frames with high speed are considered as outliers
+    - close_to_zero_speed: float. Sum for all keypoints: about 50 px/frame or 0.2 m/frame
+    - large_hip_knee_angles5: float. Hip and knee angles below this value are considered as imprecise
+    - trimmed_extrema_percent: float. Proportion of the most extreme segment values to remove before calculating their mean)
+    
+    OUTPUT:
+    - height: float. The estimated height of the person
+    '''
+    
+    # Retrieve most reliable coordinates
+    Q_coords_low_speeds_low_angles = best_coords_for_measurements(Q_coords, keypoints_names, 
+                                                                  fastest_frames_to_remove_percent=fastest_frames_to_remove_percent, close_to_zero_speed=close_to_zero_speed, large_hip_knee_angles=large_hip_knee_angles)
+    Q_coords_low_speeds_low_angles.columns = np.array([[m]*3 for m in keypoints_names]).flatten()
+
+    # Add MidShoulder column
+    df_MidShoulder = pd.DataFrame((Q_coords_low_speeds_low_angles['RShoulder'].values + Q_coords_low_speeds_low_angles['LShoulder'].values) /2)
+    df_MidShoulder.columns = ['MidShoulder']*3
+    Q_coords_low_speeds_low_angles = pd.concat((Q_coords_low_speeds_low_angles.reset_index(drop=True), df_MidShoulder), axis=1)
+
+    # Automatically compute the height of the person
+    pairs_up_to_shoulders = [['RHeel', 'RAnkle'], ['RAnkle', 'RKnee'], ['RKnee', 'RHip'], ['RHip', 'RShoulder'],
+                            ['LHeel', 'LAnkle'], ['LAnkle', 'LKnee'], ['LKnee', 'LHip'], ['LHip', 'LShoulder']]
+    try:
+        rfoot, rshank, rfemur, rback, lfoot, lshank, lfemur, lback = [euclidean_distance(Q_coords_low_speeds_low_angles[pair[0]],Q_coords_low_speeds_low_angles[pair[1]]) for pair in pairs_up_to_shoulders]
+    except:
+        raise ValueError('At least one of the following markers is missing for computing the height of the person:\
+                         RHeel, RAnkle, RKnee, RHip, RShoulder, LHeel, LAnkle, LKnee, LHip, LShoulder.\
+                         Make sure that the person is entirely visible, or use a calibration file instead, or set "to_meters=false".')
+    if 'Head' in keypoints_names:
+        head = euclidean_distance(Q_coords_low_speeds_low_angles['MidShoulder'], Q_coords_low_speeds_low_angles['Head'])
+    else:
+        head = euclidean_distance(Q_coords_low_speeds_low_angles['MidShoulder'], Q_coords_low_speeds_low_angles['Nose'])*1.33
+    heights = (rfoot + lfoot)/2 + (rshank + lshank)/2 + (rfemur + lfemur)/2 + (rback + lback)/2 + head
+    
+    # Remove the 20% most extreme values
+    height = trimmed_mean(heights, trimmed_extrema_percent=trimmed_extrema_percent)
+
+    return height
 
 
 def dict_segment_marker_pairs(scaling_root, right_left_symmetry=True):
@@ -405,7 +574,8 @@ def update_scale_values(scaling_root, segment_ratio_dict):
         scale_set.append(new_scale)
         
 
-def perform_scaling(trc_file, kinematics_dir, osim_setup_dir, model_name, right_left_symmetry=True, subject_height=1.75, subject_mass=70, remove_scaling_setup=True):
+def perform_scaling(trc_file, kinematics_dir, osim_setup_dir, model_name, right_left_symmetry=True, subject_height=1.75, subject_mass=70, 
+                    remove_scaling_setup=True, fastest_frames_to_remove_percent=0.1,close_to_zero_speed_m=0.2, large_hip_knee_angles=45, trimmed_extrema_percent=0.5):
     '''
     Perform model scaling based on the (not necessarily static) TRC file:
     - Remove 10% fastest frames (potential outliers)
@@ -427,8 +597,9 @@ def perform_scaling(trc_file, kinematics_dir, osim_setup_dir, model_name, right_
     - A scaled OpenSim model file.
     '''
 
-    fastest_frames_to_remove_percent = 0.1
-    trimmed_extrema_percent = 0.4 # proportion of the most extreme segment values to remove before calculating their mean
+    fastest_frames_to_remove_percent = 0.1 # fasters frames may be outliers
+    large_hip_knee_angles = 45 # imprecise coordinates when person is crouching
+    trimmed_extrema_percent = 0.2 # proportion of the most extreme segment values to remove before calculating their mean
 
     try:
         # Load model
@@ -446,17 +617,12 @@ def perform_scaling(trc_file, kinematics_dir, osim_setup_dir, model_name, right_
         scaling_root = scaling_tree.getroot()
         scaling_path_temp = str(kinematics_dir / (trc_file.stem + '_scaling_setup.xml'))
         
-        # Read trc file
+        # Remove fastest frames, frames with null speed, and frames with large hip and knee angles
         Q_coords, _, _, markers, _ = read_trc(trc_file)
+        Q_coords_low_speeds_low_angles = best_coords_for_measurements(Q_coords, markers, fastest_frames_to_remove_percent=fastest_frames_to_remove_percent, large_hip_knee_angles=large_hip_knee_angles, close_to_zero_speed=close_to_zero_speed_m)
 
-        # Using 80% slowest frames for scaling, removing frames when person is out of frame
-        Q_diff = Q_coords.diff(axis=0).sum(axis=1)
-        Q_diff = Q_diff[Q_diff != 0] # remove when speed is 0 (person out of frame)
-        min_speed_indices = Q_diff.abs().nsmallest(int(len(Q_diff) * (1-fastest_frames_to_remove_percent))).index
-        Q_coords_scaling = Q_coords.iloc[min_speed_indices].reset_index(drop=True)
-
-        # Get manual scale values (scale on trimmed mean of measured segments rather than on raw keypoints)
-        segment_ratio_dict = dict_segment_ratio(scaling_root, unscaled_model, Q_coords_scaling, markers, 
+        # Get manual scale values (mean from remaining frames after trimming the 20% most extreme values)
+        segment_ratio_dict = dict_segment_ratio(scaling_root, unscaled_model, Q_coords_low_speeds_low_angles, markers, 
                                                 trimmed_extrema_percent=trimmed_extrema_percent, right_left_symmetry=right_left_symmetry)
 
         # Update scaling setup file
@@ -533,7 +699,7 @@ def perform_IK(trc_file, kinematics_dir, osim_setup_dir, model_name, remove_IK_s
         raise
 
 
-def kinematics(config_dict):
+def kinematics_all(config_dict):
     '''
     Runs OpenSim scaling and inverse kinematics
     
@@ -569,10 +735,15 @@ def kinematics(config_dict):
     if use_augmentation: model_name = 'LSTM'
     else: model_name = config_dict.get('pose').get('pose_model').upper()
     right_left_symmetry = config_dict.get('kinematics').get('right_left_symmetry')
-    remove_scaling_setup = config_dict.get('kinematics').get('remove_individual_scaling_setup')
-    remove_IK_setup = config_dict.get('kinematics').get('remove_individual_IK_setup')
     subject_height = config_dict.get('project').get('participant_height')
     subject_mass = config_dict.get('project').get('participant_mass')
+
+    remove_scaling_setup = config_dict.get('kinematics').get('remove_individual_scaling_setup')
+    remove_IK_setup = config_dict.get('kinematics').get('remove_individual_IK_setup')
+    fastest_frames_to_remove_percent = config_dict.get('kinematics').get('fastest_frames_to_remove_percent')
+    large_hip_knee_angles = config_dict.get('kinematics').get('large_hip_knee_angles')
+    trimmed_extrema_percent = config_dict.get('kinematics').get('trimmed_extrema_percent')
+    close_to_zero_speed_m = config_dict.get('kinematics').get('close_to_zero_speed_m')
 
     pose3d_dir = Path(project_dir) / 'pose-3d'
     kinematics_dir = Path(project_dir) / 'kinematics'
@@ -624,7 +795,8 @@ def kinematics(config_dict):
         logging.info(f"Processing TRC file: {trc_file.resolve()}")
 
         logging.info("Scaling...")
-        perform_scaling(trc_file, kinematics_dir, osim_setup_dir, model_name, right_left_symmetry=right_left_symmetry, subject_height=subject_height[p], subject_mass=subject_mass[p], remove_scaling_setup=remove_scaling_setup)
+        perform_scaling(trc_file, kinematics_dir, osim_setup_dir, model_name, right_left_symmetry=right_left_symmetry, subject_height=subject_height[p], subject_mass=subject_mass[p], 
+                        remove_scaling_setup=remove_scaling_setup, fastest_frames_to_remove_percent=fastest_frames_to_remove_percent, large_hip_knee_angles=large_hip_knee_angles, trimmed_extrema_percent=trimmed_extrema_percent,close_to_zero_speed_m=close_to_zero_speed_m)
         logging.info(f"\tDone. OpenSim logs saved to {opensim_logs_file.resolve()}.")
         logging.info(f"\tScaled model saved to {(kinematics_dir / (trc_file.stem + '_scaled.osim')).resolve()}")
         
