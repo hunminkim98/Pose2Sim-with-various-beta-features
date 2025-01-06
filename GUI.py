@@ -23,11 +23,18 @@ class App:
 
         self.root = root
         self.root.title("Pose2Sim Configuration")
-        self.root.geometry("1200x900")
+        # Set minimum window size
+        self.root.minsize(800, 600)
+        # Let the window size adjust to its contents
+        self.root.resizable(True, True)
         self.change_intrinsics_extension = False
         self.language = None  # Will hold 'en' for English or 'fr'
         self.process_mode = None  # 'single' or 'batch'
-        self.num_trials = 0  # Number of trials in batch mode
+
+        # TODO: num_trials should determine the length of folders
+        self.num_trials = 0  # Number of trials in batch mode 
+        
+        # TODO: Separate config and GUI
         self.config_template= r"""###############################################################################
 ## PROJECT PARAMETERS                                                        ##
 ###############################################################################
@@ -338,7 +345,7 @@ id = "19"
         }
         # Create progress bar
         self.progress_frame = ctk.CTkFrame(self.root)
-        self.progress_frame.pack(fill='x', padx=10, pady=5)
+        self.progress_frame.pack(side='bottom', fill='x', padx=10, pady=5) # NOTE: UPDATAED 2024-01-06 by HunMin Kim - Keep the progress bar at the bottom
         
         self.progress_bar = ctk.CTkProgressBar(self.progress_frame)
         self.progress_bar.pack(fill='x', padx=10, pady=5)
@@ -369,8 +376,8 @@ id = "19"
                 participant_name = 'Participant'
             self.participant_name = participant_name.strip()
             
-            # Create the participant folder structure based on process mode
-            self.choose_process_mode(lang_frame)
+            # Select parent directory before creating folder structure
+            self.select_parent_directory(lang_frame)
 
         # Language selection buttons
         ctk.CTkLabel(lang_frame, text="Select Language / Choisir la langue",
@@ -379,6 +386,47 @@ id = "19"
                       width=200, height=50, font=('Helvetica', 18)).pack(pady=20)
         ctk.CTkButton(lang_frame, text="Français (coming soon)", command=lambda: set_language('fr'),
                       width=200, height=50, font=('Helvetica', 18)).pack(pady=20)
+
+# NOTE: UPDATAED 2024-01-06 by HunMin Kim - I think it would be convinient to let the user select the parent directory before creating the folder structure
+    def select_parent_directory(self, previous_frame):
+        # Clear previous frame
+        previous_frame.destroy()
+
+        # Create a frame for directory selection
+        dir_frame = ctk.CTkFrame(self.root)
+        dir_frame.pack(expand=True, fill='both')
+
+        # Create label
+        ctk.CTkLabel(dir_frame, text="Select Parent Directory",
+                     font=('Helvetica', 20, 'bold')).pack(pady=20)
+
+        # Create frame for path display and button
+        path_frame = ctk.CTkFrame(dir_frame)
+        path_frame.pack(pady=20, padx=20, fill='x')
+
+        # Path display
+        self.path_var = ctk.StringVar(value=os.getcwd())  # Default to current directory
+        path_entry = ctk.CTkEntry(path_frame, textvariable=self.path_var, width=400)
+        path_entry.pack(side='left', padx=(0, 10))
+
+        def browse_directory():
+            directory = filedialog.askdirectory(initialdir=self.path_var.get())
+            if directory:
+                self.path_var.set(directory)
+
+        # Browse button
+        browse_btn = ctk.CTkButton(path_frame, text="Browse", command=browse_directory)
+        browse_btn.pack(side='right')
+
+        def confirm_directory():
+            self.parent_directory = self.path_var.get()
+            dir_frame.destroy()
+            self.choose_process_mode(dir_frame)
+
+        # Confirm button
+        confirm_btn = ctk.CTkButton(dir_frame, text="Confirm", command=confirm_directory,
+                                   width=200, height=50, font=('Helvetica', 18))
+        confirm_btn.pack(pady=20)
 
     def choose_process_mode(self, lang_frame):
         # Clear language selection frame
@@ -405,7 +453,7 @@ id = "19"
                       width=200, height=50, font=('Helvetica', 18)).pack(pady=20)
 
     def initial_config_check(self):
-        config_file_path = os.path.join(self.participant_name, 'Config.toml')
+        config_file_path = os.path.join(self.parent_directory, self.participant_name, 'Config.toml')
         if self.process_mode == 'single':
             # Create single process folder structure
             self.create_single_folder_structure()
@@ -436,8 +484,8 @@ id = "19"
         self.init_app()
 
     def create_single_folder_structure(self):
-        # Create participant directory directly
-        participant_path = os.path.join(self.participant_name)
+        # Create participant directory using selected parent directory
+        participant_path = os.path.join(self.parent_directory, self.participant_name)
     
         # Create calibration and videos subdirectories in the participant folder
         calibration_path = os.path.join(participant_path, 'calibration')
@@ -449,8 +497,8 @@ id = "19"
     
           
     def create_batch_folder_structure(self):
-        # Create participant directory
-        participant_path = os.path.join(self.participant_name)
+        # Create participant directory using selected parent directory
+        participant_path = os.path.join(self.parent_directory, self.participant_name)
         os.makedirs(participant_path, exist_ok=True)
         
         # Create calibration directory
@@ -472,20 +520,20 @@ id = "19"
                 if response:
                     # Delete all trial folders if they exist
                     for i in range(1, self.num_trials + 1):
-                        trial_path = os.path.join(self.participant_name, f'Trial_{i}')
+                        trial_path = os.path.join(self.parent_directory, self.participant_name, f'Trial_{i}')
                         if os.path.exists(trial_path):
                             shutil.rmtree(trial_path)
     
                     # Recreate trial structure
                     for i in range(1, self.num_trials + 1):
-                        trial_path = os.path.join(self.participant_name, f'Trial_{i}')
+                        trial_path = os.path.join(self.parent_directory, self.participant_name, f'Trial_{i}')
                         os.makedirs(trial_path, exist_ok=True)
                         videos_path = os.path.join(trial_path, 'videos')
                         os.makedirs(videos_path, exist_ok=True)
     
             else:
                 # Single mode handling
-                videos_path = os.path.join(self.participant_name, 'videos')
+                videos_path = os.path.join(self.parent_directory, self.participant_name, 'videos')
                 if os.path.exists(videos_path):
                     if messagebox.askyesno("Delete Old Videos?",
                                         "Would you like to delete old Pose videos?"):
@@ -508,11 +556,11 @@ id = "19"
                 # For single mode, proceed directly to video input
                 num_cameras = int(self.num_cameras_var.get()) if self.num_cameras_var.get() else 0
                 video_extension = self.video_extension_var.get()
-                if not self.input_videos(os.path.join(self.participant_name, 'videos')):
+                if not self.input_videos(os.path.join(self.parent_directory, self.participant_name, 'videos')):
                     return
         else:
             # Normal initialization without skipping
-            config_file_path = os.path.join(self.participant_name, 'Config.toml')
+            config_file_path = os.path.join(self.parent_directory, self.participant_name, 'Config.toml')
             if self.process_mode == 'batch':
                 # Create batch session structure
                 self.create_batch_folder_structure()
@@ -652,7 +700,7 @@ id = "19"
                 'keep': "Keep",
                 'participant': 'Participant',
                 'height': 'Height (m):',
-                'batch_configuration' :'batch configuration',
+                'batch configuration' :'batch configuration',
                 'mass': 'Mass (kg):',
                 'submit': 'Submit',
             },
@@ -788,7 +836,7 @@ id = "19"
     def init_variables(self):
         # Initialize variables to hold user inputs
         # Load from Config.toml if exists
-        config_file_path = os.path.join(self.participant_name, 'Config.toml')
+        config_file_path = os.path.join(self.parent_directory, self.participant_name, 'Config.toml')
         if os.path.exists(config_file_path):
             with open(config_file_path, 'r', encoding='utf-8') as f:
                 config_content = f.read()
@@ -1185,9 +1233,9 @@ id = "19"
     
                 # Handle folder creation based on process mode
                 if self.process_mode == 'single':
-                    calibration_path = os.path.join(self.participant_name, 'calibration')
+                    calibration_path = os.path.join(self.parent_directory, self.participant_name, 'calibration')
                 else:
-                    calibration_path = os.path.join(self.participant_name,'calibration')
+                    calibration_path = os.path.join(self.parent_directory, self.participant_name,'calibration')
     
                 # Create calibration folders
                 for cam in range(1, num_cameras + 1):
@@ -1207,9 +1255,9 @@ id = "19"
                 if not self.input_scene_coordinates():
                     return
     
-                config_file_path = os.path.join(self.participant_name, 'Config.toml')
+                config_file_path = os.path.join(self.parent_directory, self.participant_name, 'Config.toml')
                 if self.process_mode == 'batch':
-                    config_file_path = os.path.join(self.participant_name,'Config.toml')
+                    config_file_path = os.path.join(self.parent_directory, self.participant_name,'Config.toml')
     
                 self.generate_config_toml()
                 self.update_config_toml(config_file_path, section='calibration')
@@ -1227,17 +1275,17 @@ id = "19"
     
                 # Copy file to appropriate calibration folder
                 if self.process_mode == 'single':
-                    dest_dir = os.path.join(self.participant_name, 'calibration')
+                    dest_dir = os.path.join(self.parent_directory, self.participant_name, 'calibration')
                 else:
-                    dest_dir = os.path.join(self.participant_name,'calibration')
+                    dest_dir = os.path.join(self.parent_directory, self.participant_name,'calibration')
                 os.makedirs(dest_dir, exist_ok=True)
                 dest_path = os.path.join(dest_dir, os.path.basename(file_path))
                 shutil.copy(file_path, dest_path)
     
                 # Update Config.toml
-                config_file_path = os.path.join(self.participant_name, 'Config.toml')
+                config_file_path = os.path.join(self.parent_directory, self.participant_name, 'Config.toml')
                 if self.process_mode == 'batch':
-                    config_file_path = os.path.join(self.participant_name,'Config.toml')
+                    config_file_path = os.path.join(self.parent_directory, self.participant_name,'Config.toml')
                 self.generate_config_toml()
                 self.update_config_toml(config_file_path, section='calibration')
                 messagebox.showinfo("Calibration Complete",
@@ -1256,9 +1304,9 @@ id = "19"
     def input_checkerboard_videos(self, num_cameras, video_extension):
         messagebox.showinfo("Input Videos",
                         "Please select the checkerboard videos for each camera.")
-        base_path = self.participant_name
+        base_path = self.parent_directory
         if self.process_mode == 'batch':
-            base_path = os.path.join(self.participant_name)
+            base_path = os.path.join(self.parent_directory, self.participant_name)
     
         for cam in range(1, num_cameras + 1):
             file_path = filedialog.askopenfilename(
@@ -1277,9 +1325,9 @@ id = "19"
     def input_scene_images(self, num_cameras, video_extension):
         messagebox.showinfo("Scene Images", 
                         "Please select scene images for each camera.")
-        base_path = self.participant_name
+        base_path = self.parent_directory
         if self.process_mode == 'batch':
-            base_path = os.path.join(self.participant_name)
+            base_path = os.path.join(self.parent_directory, self.participant_name)
     
         for cam in range(1, num_cameras + 1):
             file_path = filedialog.askopenfilename(
@@ -1406,9 +1454,9 @@ id = "19"
     
         # Define config file path based on process mode
         if self.process_mode == 'batch':
-            self.config_file_path = os.path.join(self.participant_name, 'Config.toml')
+            self.config_file_path = os.path.join(self.parent_directory, self.participant_name, 'Config.toml')
         else:
-            self.config_file_path = os.path.join(self.participant_name, 'Config.toml')
+            self.config_file_path = os.path.join(self.parent_directory, self.participant_name, 'Config.toml')
     
         def create_coordinate_window():
             if self.current_point_index >= len(points_2d):
@@ -1559,9 +1607,9 @@ id = "19"
                         
     def generate_config_toml(self):
         """Only generates template if config file doesn't exist"""
-        config_file_path = os.path.join(self.participant_name, 'Config.toml')
+        config_file_path = os.path.join(self.parent_directory, self.participant_name, 'Config.toml')
         if self.process_mode == 'batch':
-            config_file_path = os.path.join(self.participant_name,'Config.toml')
+            config_file_path = os.path.join(self.parent_directory, self.participant_name,'Config.toml')
     
         # Only generate template if file doesn't exist
         if not os.path.exists(config_file_path):
@@ -1909,9 +1957,9 @@ id = "19"
         self.change_intrinsics_extension = False
         
         # Update Config.toml
-        config_file_path = os.path.join(self.participant_name, 'Config.toml')
+        config_file_path = os.path.join(self.parent_directory, self.participant_name, 'Config.toml')
         if self.process_mode == 'batch':
-            config_file_path = os.path.join(self.participant_name, 'Config.toml')
+            config_file_path = os.path.join(self.parent_directory, self.participant_name,'Config.toml')
         
         self.update_config_toml(config_file_path, section='calibration')
         
@@ -1936,9 +1984,9 @@ id = "19"
                 self.change_intrinsics_extension = True
                 
                 # Update Config.toml
-                config_file_path = os.path.join(self.participant_name, 'Config.toml')
+                config_file_path = os.path.join(self.parent_directory, self.participant_name, 'Config.toml')
                 if self.process_mode == 'batch':
-                    config_file_path = os.path.join(self.participant_name, 'Config.toml')
+                    config_file_path = os.path.join(self.parent_directory, self.participant_name,'Config.toml')
                 
                 self.update_config_toml(config_file_path, section='calibration')
                 
@@ -1966,9 +2014,9 @@ id = "19"
   
         
     def extract_frames(self, time_interval):
-        base_path = os.path.join(self.participant_name, 'calibration', 'intrinsics')
+        base_path = os.path.join(self.parent_directory, self.participant_name, 'calibration', 'intrinsics')
         if self.process_mode == 'batch':
-            base_path = os.path.join(self.participant_name,'calibration', 'intrinsics')
+            base_path = os.path.join(self.parent_directory, self.participant_name,'calibration', 'intrinsics')
     
         if not os.path.exists(base_path):
             messagebox.showerror("Error", f"Directory '{base_path}' does not exist.")
@@ -2024,7 +2072,6 @@ id = "19"
     
                 cap.release()
                 
-              
                 # Update progress to 50%
                 progress = ((idx + 1) / total_videos)
                 self.progress_bar.set(progress)
@@ -2246,8 +2293,8 @@ id = "19"
         # Keypoints to consider
         ctk.CTkLabel(self.sync_options_frame, text="Select keypoints to consider for synchronization:").grid(
             row=0, column=0, sticky='w', pady=5)
-        keypoints_options = ['all', 'CHip', 'RHip', 'RKnee', 'RAnkle', 'RBigToe', 'RSmallToe', 'RHeel',
-                             'LHip', 'LKnee', 'LAnkle', 'LBigToe', 'LSmallToe', 'LHeel', 'Neck', 'Head',
+        keypoints_options = ['all', 'CHip', 'RHip', 'RKnee', 'RAnkle', 'RBigToe', 'RSmallToe',
+                             'RHeel', 'LHip', 'LKnee', 'LAnkle', 'LBigToe', 'LSmallToe', 'LHeel', 'Neck', 'Head',
                              'Nose', 'RShoulder', 'RElbow', 'RWrist', 'LShoulder', 'LElbow', 'LWrist', 'Custom']
         self.keypoints_menu = ctk.CTkOptionMenu(
             self.sync_options_frame, variable=self.keypoints_var, values=keypoints_options, width=200)
@@ -2623,9 +2670,9 @@ id = "19"
         self.participant_masses = masses
     
         # Update Config.toml
-        config_file_path = os.path.join(self.participant_name, 'Config.toml')
+        config_file_path = os.path.join(self.parent_directory, self.participant_name, 'Config.toml')
         if self.process_mode == 'batch':
-            config_file_path = os.path.join(self.participant_name, 'Config.toml')
+            config_file_path = os.path.join(self.parent_directory, self.participant_name,'Config.toml')
         
         try:
             # Read existing config
@@ -2657,7 +2704,7 @@ id = "19"
     
     def save_synchronization_settings(self):
         # Update the synchronization settings in the Config.toml file
-        config_file_path = os.path.join(self.participant_name, 'Config.toml')
+        config_file_path = os.path.join(self.parent_directory, self.participant_name, 'Config.toml')
         self.update_config_toml(config_file_path, section='synchronization')
         self.update_progress('synchronization')
         messagebox.showinfo("Saved", "Synchronization settings saved.")
@@ -2666,7 +2713,7 @@ id = "19"
 
     def save_advanced_settings(self):
         # Update the advanced settings in the Config.toml file
-        config_file_path = os.path.join(self.participant_name, 'Config.toml')
+        config_file_path = os.path.join(self.parent_directory, self.participant_name, 'Config.toml')
         self.update_config_toml(config_file_path, section='advanced')
         messagebox.showinfo("Saved", "Advanced Configuration settings saved.")
         # Update the Advanced Configuration tab indicator to green
@@ -2702,7 +2749,7 @@ id = "19"
             
             # Create scrollable frame for camera times
             time_scroll_frame = ctk.CTkScrollableFrame(self.approx_time_frame, width=400, height=200)
-            time_scroll_frame.grid(row=0, column=0, columnspan=2, sticky='nsew', padx=10, pady=5)
+            time_scroll_frame.grid(row=0, column=0, columnspan=3, sticky='nsew', padx=10, pady=5)
             
             # Header label
             ctk.CTkLabel(time_scroll_frame, 
@@ -2732,7 +2779,7 @@ id = "19"
                 command=self.confirm_camera_times,
                 width=150
             )
-            confirm_button.grid(row=1, column=0, columnspan=2, pady=10)
+            confirm_button.grid(row=1, column=0, columnspan=3, pady=10)
             
         else:
             # Hide the frame in auto mode
@@ -2754,7 +2801,7 @@ id = "19"
                     return
     
             # Update Config.toml
-            config_file_path = os.path.join(self.participant_name, 'Config.toml')
+            config_file_path = os.path.join(self.parent_directory, self.participant_name, 'Config.toml')
             try:
                 with open(config_file_path, 'r', encoding='utf-8') as f:
                     config = parse(f.read())
@@ -2814,7 +2861,7 @@ id = "19"
             # Handle single mode
             if self.process_mode == 'single':
                 # Create videos directory
-                target_path = os.path.join(self.participant_name, 'videos')
+                target_path = os.path.join(self.parent_directory, self.participant_name, 'videos')
                 os.makedirs(target_path, exist_ok=True)
     
                 # Check if directory already has videos
@@ -2839,7 +2886,7 @@ id = "19"
                     return
     
                 # Update configuration
-                config_file_path = os.path.join(self.participant_name, 'Config.toml')
+                config_file_path = os.path.join(self.parent_directory, self.participant_name, 'Config.toml')
                 self.update_config_toml(config_file_path, section='pose')
     
                 # Show completion message and update UI
@@ -2852,13 +2899,13 @@ id = "19"
             else:
                 try:
                     # Update parent configuration first
-                    parent_config_path = os.path.join(self.participant_name, 'Config.toml')
+                    parent_config_path = os.path.join(self.parent_directory, self.participant_name, 'Config.toml')
                     self.update_config_toml(parent_config_path, section='pose')
     
                     # Process each trial
                     for trial in range(1, self.num_trials + 1):
                         # Create trial directory structure
-                        trial_path = os.path.join(self.participant_name, f'Trial_{trial}')
+                        trial_path = os.path.join(self.parent_directory, self.participant_name, f'Trial_{trial}')
                         videos_path = os.path.join(trial_path, 'videos')
                         os.makedirs(videos_path, exist_ok=True)
     
@@ -2963,7 +3010,7 @@ Pose2Sim.runAll(do_calibration=True,
 """
 
         # Save the Python script to the participant's directory
-        script_path = os.path.join(self.participant_name, 'run_pose2sim.py')
+        script_path = os.path.join(self.parent_directory, self.participant_name, 'run_pose2sim.py')
         with open(script_path, 'w', encoding='utf-8') as f:
             f.write(python_script_content)
 
@@ -2976,7 +3023,7 @@ REM Activate Conda environment
 call conda activate Pose2Sim
 
 REM Change to the specified directory
-cd "{os.path.abspath(self.participant_name)}"
+cd "{os.path.abspath(os.path.join(self.parent_directory, self.participant_name))}"
 
 REM Launch the Python script and keep the command prompt open
 python run_pose2sim.py
@@ -2987,7 +3034,7 @@ pause
 endlocal
 """
 
-        cmd_script_path = os.path.join(self.participant_name, 'activate_pose2sim.cmd')
+        cmd_script_path = os.path.join(self.parent_directory, self.participant_name, 'activate_pose2sim.cmd')
         with open(cmd_script_path, 'w', encoding='utf-8') as f:
             f.write(cmd_script_content)
 
@@ -3031,7 +3078,7 @@ endlocal
         # Clear previous image if any
         for widget in self.checkerboard_display_frame.winfo_children():
             widget.destroy()
-
+    
         panel = ctk.CTkLabel(self.checkerboard_display_frame, image=ctki, text="")
         panel.image = ctki  # Keep a reference to avoid garbage collection
         panel.pack()
@@ -3047,14 +3094,9 @@ endlocal
             if file_path:
                 image.save(file_path, 'PDF')
                 messagebox.showinfo("Saved", f"Checkerboard image saved as {file_path}")
-
         ctk.CTkButton(button_frame, text="Save as PDF", command=save_as_pdf,
                      fg_color="#4CAF50", text_color='white', width=150, height=40).pack(side='left', padx=5)
-
     
-
-    
-            
     def build_activation_tab(self):
         """
         Build the Activation tab with three activation options.
@@ -3112,7 +3154,7 @@ endlocal
         """
         # Check pose model
         pose_model = None
-        config_file_path = os.path.join(self.participant_name, 'Config.toml')
+        config_file_path = os.path.join(self.parent_directory, self.participant_name, 'Config.toml')
         try:
             with open(config_file_path, 'r', encoding='utf-8') as f:
                 config = parse(f.read())
@@ -3146,7 +3188,7 @@ Pose2Sim.runAll(do_calibration=True,
     """
     
         # Save the Python script
-        script_path = os.path.join(self.participant_name, 'run_pose2sim.py')
+        script_path = os.path.join(self.parent_directory, self.participant_name, 'run_pose2sim.py')
         with open(script_path, 'w', encoding='utf-8') as f:
             f.write(python_script_content)
     
@@ -3155,19 +3197,19 @@ Pose2Sim.runAll(do_calibration=True,
             launch_script = f"""
     @echo off
     setlocal EnableDelayedExpansion
-    
+
     REM Activate Conda environment
     call conda activate Pose2Sim
-    
+
     REM Change to the specified directory
-    cd "{os.path.abspath(self.participant_name)}"
-    
+    cd "{os.path.abspath(os.path.join(self.parent_directory, self.participant_name))}"
+
     REM Launch the Python script and keep the command prompt open
     python run_pose2sim.py
-    
+
     REM Pause the command prompt to prevent it from closing
     pause
-    
+
     endlocal
     """
             script_ext = 'cmd'
@@ -3177,16 +3219,16 @@ Pose2Sim.runAll(do_calibration=True,
             launch_script = f"""
     @echo off
     setlocal EnableDelayedExpansion
-    
+
     REM Change to the specified directory
-    cd "{os.path.abspath(self.participant_name)}"
-    
+    cd "{os.path.abspath(os.path.join(self.parent_directory, self.participant_name))}"
+
     REM Launch the Python script
     call conda activate Pose2Sim && python run_pose2sim.py
-    
+
     REM Pause to keep the window open
     pause
-    
+
     endlocal
     """
             script_ext = 'bat'
@@ -3195,11 +3237,11 @@ Pose2Sim.runAll(do_calibration=True,
         else:  # powershell
             launch_script = f"""
     # Change to the specified directory
-    cd "{os.path.abspath(self.participant_name)}"
-    
+    cd "{os.path.abspath(os.path.join(self.parent_directory, self.participant_name))}"
+
     # Activate Conda environment and run script
     conda activate Pose2Sim; python run_pose2sim.py
-    
+
     # Pause to keep the window open
     Write-Host "Press any key to continue..."
     $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
@@ -3209,7 +3251,7 @@ Pose2Sim.runAll(do_calibration=True,
     
         # Save and execute the launch script
         script_name = f'activate_pose2sim_{type}.{script_ext}'
-        launch_script_path = os.path.join(self.participant_name, script_name)
+        launch_script_path = os.path.join(self.parent_directory, self.participant_name, script_name)
         with open(launch_script_path, 'w', encoding='utf-8') as f:
             f.write(launch_script)
     
@@ -3258,7 +3300,7 @@ Pose2Sim.runAll(do_calibration=True,
    
     def finalize_configuration(self):
         """Create Config.toml files for trials based on parent configuration"""
-        participant_path = os.path.join(self.participant_name)
+        participant_path = os.path.join(self.parent_directory, self.participant_name)
         
         # Get the parent Config.toml content
         parent_config_path = os.path.join(participant_path, 'Config.toml')
@@ -3374,7 +3416,7 @@ Pose2Sim.runAll(do_calibration=True,
         scroll_frame.pack(fill='both', expand=True)
         
         # Load trial configuration
-        config_path = os.path.join(self.participant_name, f'Trial_{trial_number}', 'Config.toml')
+        config_path = os.path.join(self.parent_directory, self.participant_name, f'Trial_{trial_number}', 'Config.toml')
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
                 config = parse(f.read())
