@@ -21,7 +21,8 @@ class App:
     def __init__(self, root):
         # Initialize CustomTkinter
         ctk.set_appearance_mode("System")  # Modes: "System" (default), "Dark", "Light"
-        ctk.set_default_color_theme("blue")  # Themes: "blue" (default), "green", "dark-blue"
+        custom_theme = os.path.join(os.path.dirname(__file__), "config", "custom.json")
+        ctk.set_default_color_theme(custom_theme)  # Themes: "blue" (default), "green", "dark-blue", "config/custom.json"
 
         self.root = root
         self.root.title("Pose2Sim Configuration")
