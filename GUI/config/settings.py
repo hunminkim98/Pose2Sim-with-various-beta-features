@@ -18,6 +18,9 @@ class InitialSettings:
         lang_frame.pack(expand=True, fill='both')
 
         def set_language(lang):
+            if lang == 'fr':
+                messagebox.showinfo("Not Implemented", "French language support is not yet implemented.")
+                return
             self.language = lang
             # Prompt the user to enter the participant name
             participant_name = simpledialog.askstring(
