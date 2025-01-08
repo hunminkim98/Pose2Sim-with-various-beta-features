@@ -19,7 +19,7 @@ class IntroWindow:
 
         # Create the intro window
         self.root = ctk.CTk()
-        self.root.title("Pose2Sim Intro")
+        self.root.title("Welcome to Pose2Sim")
         
         # Get screen dimensions
         screen_width = self.root.winfo_screenwidth()
