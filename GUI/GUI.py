@@ -2605,18 +2605,6 @@ class App:
             self.progress_var.set(progress)
             self.progress_bar.set(progress)
             
-            # Determine color based on progress
-            if progress <= 0.25:
-                color = "#1f538d"  # Light red
-            elif progress <= 0.50:
-                color = "#1f538d"  # Light orange
-            elif progress <= 0.75:
-                color = "#1f538d"  # Light yellow
-            else:
-                color = "#1f538d"  # colors to change later now all blue 
-                
-            self.progress_bar.configure(progress_color=color)
-            
             if section == 'calibration':
                 status_text = f"Progress: 25% - Calibration completed"
             elif section == 'prepare_video':
@@ -2629,6 +2617,7 @@ class App:
                 status_text = f"Progress: {int(progress * 100)}%"
             
             self.progress_label.configure(text=status_text)
+            
     def activate_pose2sim(self):
         # Determine if synchronization should be enabled based on the user's choice
         do_synchronization = self.sync_videos_var.get().lower() == 'no'
