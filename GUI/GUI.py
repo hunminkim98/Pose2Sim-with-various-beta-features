@@ -14,6 +14,7 @@ from customtkinter import CTkImage
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import ast
+from intro import IntroWindow
 
 from config.settings import config_template, InitialSettings
 
@@ -3275,6 +3276,9 @@ Pose2Sim.runAll(do_calibration=True,
             print(f"Error setting {setting}: {str(e)}")
     
 def main():
+    intro = IntroWindow()
+    intro.run()
+    
     root = ctk.CTk()
     app = App(root)
     root.mainloop()
