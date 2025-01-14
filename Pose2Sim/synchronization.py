@@ -47,6 +47,7 @@ import re
 import shutil
 from anytree import RenderTree
 from anytree.importer import DictImporter
+from matplotlib.widgets import TextBox, Button
 import logging
 
 from Pose2Sim.common import sort_stringlist_by_last_number, bounding_boxes
@@ -224,7 +225,7 @@ def on_hover(event, fig, rects, annotations, bounding_boxes_list):
     fig.canvas.draw_idle()
 
 
-def on_click(event, ax, bounding_boxes_list, selected_idx_container):
+def on_click(event, ax, bounding_boxes_list, selected_idx_container, person_textbox):
     '''
     Detects if a bounding box is clicked and records the index of the selected person.
 
@@ -233,9 +234,10 @@ def on_click(event, ax, bounding_boxes_list, selected_idx_container):
     - ax: The axes object of the plot.
     - bounding_boxes_list: List of tuples containing bounding box coordinates.
     - selected_idx_container: List with one element to store the selected person's index.
+    - person_textbox: TextBox. The person selection text box widget.
 
     OUTPUTS:
-    - None. Updates selected_idx_container[0] with the index of the selected person.
+    - None. Updates selected_idx_container[0] and person_textbox with the index of the selected person.
     '''
 
     if event.inaxes != ax or event.xdata is None or event.ydata is None:
@@ -244,18 +246,18 @@ def on_click(event, ax, bounding_boxes_list, selected_idx_container):
     for idx, (x_min, y_min, x_max, y_max) in enumerate(bounding_boxes_list):
         if x_min <= event.xdata <= x_max and y_min <= event.ydata <= y_max:
             selected_idx_container[0] = idx
-            plt.close()
+            person_textbox.set_val(str(idx))  # Update the person number text box
             break
 
 
-def update_play(cap, image, slider, frame_to_json, pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, ax, fig):
+def update_play(cap, image, frame_number, frame_to_json, pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, ax, fig):
     '''
-    Updates the plot when the slider value changes.
+    Updates the plot with a new frame.
 
     INPUTS:
     - cap: cv2.VideoCapture. The video capture object.
     - image: The image object in the plot.
-    - slider: The slider widget controlling the frame number.
+    - frame_number: int. The frame number to display.
     - frame_to_json: dict. Mapping from frame numbers to JSON file names.
     - pose_dir: str. Path to the directory containing pose data.
     - json_dir_name: str. Name of the JSON directory for the current camera.
@@ -268,8 +270,6 @@ def update_play(cap, image, slider, frame_to_json, pose_dir, json_dir_name, rect
     OUTPUTS:
     - None. Updates the plot with the new frame, bounding boxes, and annotations.
     '''
-
-    frame_number = int(slider.val)
 
     frame_rgb, bounding_boxes_list_new = load_frame_and_bounding_boxes(cap, frame_number, frame_to_json, pose_dir, json_dir_name)
     if frame_rgb is None:
@@ -287,9 +287,31 @@ def update_play(cap, image, slider, frame_to_json, pose_dir, json_dir_name, rect
     fig.canvas.draw_idle()
 
 
-def select_person(vid_or_img_files, cam_names, json_files_names_range, search_around_frames, pose_dir, json_dirs_names):
+def handle_ok_button():
     '''
-    Allows the user to select a person from each camera by clicking on their bounding box in the video frames.
+    Handle OK button click. Closes the window and confirms the selection.
+    '''
+    plt.close()
+
+
+def handle_toggle_labels(event, keypoint_texts, show_labels):
+    '''
+    Handle toggle labels button click.
+    
+    INPUTS:
+    - event: The button click event.
+    - keypoint_texts: List of text objects showing keypoint labels.
+    - show_labels: List containing boolean flag for label visibility.
+    '''
+    show_labels[0] = not show_labels[0]  # Toggle visibility state
+    for text in keypoint_texts:
+        text.set_visible(show_labels[0])
+    plt.draw()
+
+
+def select_person(vid_or_img_files, cam_names, json_files_names_range, search_around_frames, pose_dir, json_dirs_names, keypoints_names):
+    '''
+    Allows the user to select a person, start frame and keypoints from each camera by clicking on their bounding box in the video frames.
 
     INPUTS:
     - vid_or_img_files: list of str. Paths to the video files for each camera or to the image directories for each camera.
@@ -298,19 +320,29 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
     - search_around_frames: list of tuples. Each tuple contains (start_frame, end_frame) for searching frames.
     - pose_dir: str. Path to the directory containing pose data.
     - json_dirs_names: list of str. Names of the JSON directories for each camera.
+    - keypoints_names: list of str. List of keypoint names from the skeleton model.
 
     OUTPUTS:
     - selected_id_list: list of int or None. List of the selected person indices for each camera.
+    - keypoints_to_consider: list of str. List of keypoint names to consider for synchronization.
+    - approx_time_maxspeed: list of int. List of frame numbers for synchronization.
     '''
 
-    logging.info('Multi_person mode: selecting the person to synchronize on for each camera.')
+    logging.info('Manual mode: selecting the person, start frame and keypoints to synchronize on for each camera.')
     selected_id_list = []
+    approx_time_maxspeed = []
+    keypoints_to_consider = []
+
     try: # video files
         video_files_dict = {cam_name: file for cam_name in cam_names for file in vid_or_img_files if cam_name in os.path.basename(file)}
     except: # image directories
         video_files_dict = {cam_name: files for cam_name in cam_names for files in vid_or_img_files if cam_name in os.path.basename(files[0])}
 
     for i, cam_name in enumerate(cam_names):
+        # Initialize containers for this camera
+        selected_idx_container = [0]  # Container for selected person index
+        keypoints_to_consider_container = ['R Wrist']  # Container for selected keypoints
+        
         vid_or_img_files_cam = video_files_dict.get(cam_name)
         if not vid_or_img_files_cam:
             logging.warning(f'No video file nor image directory found for camera {cam_name}')
@@ -333,51 +365,160 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
             if isinstance(cap, cv2.VideoCapture):
                 cap.release()
             continue
+        
+        # Initialize plot with a larger figure and two subplots
+        frame_height, _ = frame_rgb.shape[:2]
+        fig_height = frame_height/250
+        fig = plt.figure(figsize=(12, fig_height))  # 더 넓은 figure
+        
+        # Main video display (left side)
+        ax_video = plt.axes([0.05, 0.2, 0.6, 0.7])  # 비디오 영역 조정
+        ax_video.imshow(frame_rgb)
+        ax_video.set_title(f'Camera name: {cam_name}', fontsize=10, pad=10)
+        ax_video.axis('off')
 
-        # Initialize plot
-        frame_height, frame_width = frame_rgb.shape[:2]
-        fig_width, fig_height = frame_width / 200, frame_height / 250
+        # Keypoints selection area (right side)
+        ax_keypoints = plt.axes([0.7, 0.2, 0.25, 0.7])
+        
+        # Define relative positions for keypoints in human form
+        keypoints_positions = {
+            # Head
+            'Head': (0.5, 0.8),
+            'Neck': (0.5, 0.7),
+            'Nose': (0.5, 0.75),           
+            # Torso
+            'Hip': (0.5, 0.3),
+            'RHip': (0.4, 0.3),
+            'LHip': (0.6, 0.3),          
+            # Right side
+            'RShoulder': (0.4, 0.7),
+            'RElbow': (0.3, 0.6),
+            'RWrist': (0.2, 0.5),
+            'RKnee': (0.35, 0.2),
+            'RAnkle': (0.35, 0.05),
+            'RSmallToe': (0.3, 0.0),
+            'RBigToe': (0.4, 0.0),
+            'RHeel': (0.35, 0.02),
+            
+            # Left side
+            'LShoulder': (0.6, 0.7),
+            'LElbow': (0.7, 0.6),
+            'LWrist': (0.8, 0.5),
+            'LKnee': (0.65, 0.2),
+            'LAnkle': (0.65, 0.05),
+            'LSmallToe': (0.7, 0.0),
+            'LBigToe': (0.6, 0.0),
+            'LHeel': (0.65, 0.02)
+        }
 
-        fig, ax = plt.subplots(figsize=(fig_width, fig_height))
-        ax.imshow(frame_rgb)
-        ax.set_title(f'{cam_name}: select the person to synchronize on', fontsize=10, color='black', pad=15)
-        ax.axis('off')
+        # Create x, y coordinates
+        keypoints_x = []
+        keypoints_y = []
+        for name in keypoints_names:
+            pos = keypoints_positions.get(name, (0.5, 0.5))
+            keypoints_x.append(pos[0])
+            keypoints_y.append(pos[1])
 
+        selected_keypoints = []
+        show_labels = [True]  # Container for label visibility state
+        keypoint_texts = []  # Store text objects
+
+        # Plot keypoints as scatter points
+        scatter = ax_keypoints.scatter(keypoints_x, keypoints_y, c='blue', picker=True)
+        
+        # Add keypoint labels
+        for x, y, name in zip(keypoints_x, keypoints_y, keypoints_names):
+            text = ax_keypoints.text(x + 0.02, y, name, va='center', fontsize=8)
+            keypoint_texts.append(text)
+
+        # Add toggle labels button
+        ax_toggle = plt.axes([0.775, 0.2, 0.1, 0.04])  # 키포인트 영역 아래에 버튼 배치
+        btn_toggle = Button(ax_toggle, 'Toggle Labels')
+        btn_toggle.on_clicked(lambda event: handle_toggle_labels(event, keypoint_texts, show_labels))
+
+        ax_keypoints.set_title('Click keypoints to select', pad=10)
+        ax_keypoints.set_xlim(0, 1)
+        ax_keypoints.set_ylim(-0.1, 1)
+        ax_keypoints.axis('off')
+
+        def on_pick(event):
+            ind = event.ind[0]
+            keypoint = keypoints_names[ind]
+            if keypoint in selected_keypoints:
+                selected_keypoints.remove(keypoint)
+                scatter.set_facecolors([('blue' if n not in selected_keypoints else 'red') 
+                                      for n in keypoints_names])
+            else:
+                selected_keypoints.append(keypoint)
+                scatter.set_facecolors([('red' if n in selected_keypoints else 'blue') 
+                                      for n in keypoints_names])
+            keypoints_to_consider_container[0] = selected_keypoints
+            fig.canvas.draw_idle()
+
+        fig.canvas.mpl_connect('pick_event', on_pick)
+
+        # Controls at the bottom
+        ax_person = plt.axes([0.3, 0.1, 0.1, 0.04])
+        person_textbox = TextBox(ax_person, 'Synchronize on person number', initial='0')
+        
+        # Frame number text box
+        ax_frame = plt.axes([0.45, 0.1, 0.1, 0.04])
+        frame_textbox = TextBox(ax_frame, 'Frame', initial=str(frame_number))
+
+        # Draw bounding boxes and annotations
         rects, annotations = [], []
-        draw_bounding_boxes_and_annotations(ax, bounding_boxes_list, rects, annotations)
+        draw_bounding_boxes_and_annotations(ax_video, bounding_boxes_list, rects, annotations)
 
-        selected_idx_container = [None]
+        # Add hover event handler
+        fig.canvas.mpl_connect('motion_notify_event', 
+            lambda event: on_hover(event, fig, rects, annotations, bounding_boxes_list))
 
-        # Event handling
-        fig.canvas.mpl_connect('motion_notify_event', lambda event: on_hover(event, fig, rects, annotations, bounding_boxes_list))
-        fig.canvas.mpl_connect('button_press_event', lambda event: on_click(event, ax, bounding_boxes_list, selected_idx_container))
+        # Add click event handler
+        fig.canvas.mpl_connect('button_press_event', 
+            lambda event: on_click(event, ax_video, bounding_boxes_list, selected_idx_container, person_textbox))
 
-        # Add slider
-        ax_slider = plt.axes([ax.get_position().x0, 0.05, ax.get_position().width, 0.05])
-        slider = Slider(ax_slider, 'Frame ', search_around_frames[i][0], search_around_frames[i][1] - 1, valinit=frame_number, valfmt='%0.0f')
+        # Event handlers connection
+        person_textbox.on_submit(lambda text: handle_person_change(text, selected_idx_container, person_textbox))
+        frame_textbox.on_submit(lambda text: handle_frame_change(text, frame_number, frame_textbox, cap, ax_video, 
+                               frame_to_json, pose_dir, json_dirs_names[i], rects, annotations, 
+                               bounding_boxes_list, fig, search_around_frames, i))
 
-        # Customize slider
-        slider.label.set_fontsize(10)
-        slider.poly.set_edgecolor((0, 0, 0, 0.5))
-        slider.poly.set_facecolor('lightblue')
-        slider.poly.set_linewidth(1)
+        # Navigation buttons and OK button
+        btn_prev = plt.axes([0.565, 0.1, 0.02, 0.04])
+        btn_next = plt.axes([0.59, 0.1, 0.02, 0.04])
+        btn_ok = plt.axes([0.615, 0.1, 0.03, 0.04])
+        
+        btn_prev = plt.Button(btn_prev, '<')
+        btn_next = plt.Button(btn_next, '>')
+        btn_ok = plt.Button(btn_ok, 'OK')
 
-        # Connect the update function to the slider
-        slider.on_changed(lambda val: update_play(cap, ax.images[0], slider, frame_to_json, pose_dir, json_dirs_names[i], rects, annotations, bounding_boxes_list, ax, fig))
+        btn_prev.on_clicked(lambda event: handle_prev_frame(frame_textbox, search_around_frames, i, cap, ax_video,
+                           frame_to_json, pose_dir, json_dirs_names[i], rects, annotations,
+                           bounding_boxes_list, fig))
+        btn_next.on_clicked(lambda event: handle_next_frame(frame_textbox, search_around_frames, i, cap, ax_video,
+                           frame_to_json, pose_dir, json_dirs_names[i], rects, annotations,
+                           bounding_boxes_list, fig))
+        btn_ok.on_clicked(lambda event: handle_ok_button())
 
-        # Show the plot and handle events
+        # Keyboard navigation
+        fig.canvas.mpl_connect('key_press_event', lambda event: handle_key_press(event, frame_textbox,
+                              search_around_frames, i, cap, ax_video, frame_to_json, pose_dir,
+                              json_dirs_names[i], rects, annotations, bounding_boxes_list, fig))
+
+        # Show plot and wait for user input (window will close only when OK is clicked)
         plt.show()
         cap.release()
 
-        if selected_idx_container[0] == None:
-            selected_idx_container[0] = 0
-            logging.warning(f'No person selected for camera {cam_name}: defaulting to person 0')
+        # Store selected values after OK button is clicked
         selected_id_list.append(selected_idx_container[0])
-        logging.info(f'--> Camera #{i}: selected person #{selected_idx_container[0]}')
-    logging.info('')
+        keypoints_to_consider.append(keypoints_to_consider_container[0])
+        approx_time_maxspeed.append(int(frame_textbox.text))
+        
+        logging.info(f'--> Camera #{i}: selected person #{selected_idx_container[0]} '
+                    f'with keypoints {keypoints_to_consider_container[0]} '
+                    f'at frame #{frame_textbox.text}')
 
-    return selected_id_list
-
+    return selected_id_list, keypoints_to_consider, approx_time_maxspeed
 
 def convert_json2pandas(json_files, likelihood_threshold=0.6, keypoints_ids=[], multi_person=False, selected_id=None):
     '''
@@ -589,6 +730,7 @@ def synchronize_cams_all(config_dict):
     keypoints_to_consider = config_dict.get('synchronization').get('keypoints_to_consider')
     approx_time_maxspeed = config_dict.get('synchronization').get('approx_time_maxspeed') 
     time_range_around_maxspeed = config_dict.get('synchronization').get('time_range_around_maxspeed')
+    manual_selection = config_dict.get('synchronization').get('manual_person_selection')
 
     likelihood_threshold = config_dict.get('synchronization').get('likelihood_threshold')
     filter_cutoff = int(config_dict.get('synchronization').get('filter_cutoff'))
@@ -688,8 +830,10 @@ def synchronize_cams_all(config_dict):
         raise ValueError(f'No json files found within the specified frame range ({frame_range}) at the times {approx_time_maxspeed} +/- {time_range_around_maxspeed} s.')
     
     # Handle manual selection if multi person is True
-    if multi_person:
-        selected_id_list = select_person(vid_or_img_files, cam_names, json_files_names_range, search_around_frames, pose_dir, json_dirs_names)
+    if manual_selection:
+        selected_id_list, keypoints_to_consider, approx_time_maxspeed = select_person(
+            vid_or_img_files, cam_names, json_files_names_range, search_around_frames, 
+            pose_dir, json_dirs_names, keypoints_names)
     else:
         selected_id_list = [None] * cam_nb
 
@@ -762,3 +906,105 @@ def synchronize_cams_all(config_dict):
                 shutil.copy(os.path.join(pose_dir, os.path.basename(j_dir), j_file), os.path.join(sync_dir, os.path.basename(j_dir), json_offset_name))
 
     logging.info(f'Synchronized json files saved in {sync_dir}.')
+
+
+def handle_person_change(text, selected_idx_container, person_textbox):
+    '''
+    Handle changes to the person selection text box.
+    
+    INPUTS:
+    - text: str. The text entered in the person selection box.
+    - selected_idx_container: list. Container for the selected person index.
+    - person_textbox: TextBox. The person selection text box widget.
+    '''
+    try:
+        selected_idx_container[0] = int(text)
+    except ValueError:
+        person_textbox.set_val('0')
+        selected_idx_container[0] = 0
+
+
+def handle_keypoints_change(text, keypoints_to_consider_container):
+    '''
+    Handle changes to the keypoints selection text box.
+    
+    INPUTS:
+    - text: str. The text entered in the keypoints selection box.
+    - keypoints_to_consider_container: list. Container for the selected keypoints.
+    '''
+    keypoints_to_consider_container[0] = text.split(',')
+
+
+def handle_frame_change(text, frame_number, frame_textbox, cap, ax_video, frame_to_json, 
+                       pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, 
+                       fig, search_around_frames, i):
+    '''
+    Handle changes to the frame number text box.
+    
+    INPUTS:
+    - text: str. The text entered in the frame number box.
+    - frame_number: int. The current frame number.
+    - frame_textbox: TextBox. The frame number text box widget.
+    - Other parameters: Same as in update_play function.
+    '''
+    try:
+        frame_num = int(text)
+        if search_around_frames[i][0] <= frame_num <= search_around_frames[i][1]:
+            update_play(cap, ax_video.images[0], frame_num, frame_to_json, 
+                       pose_dir, json_dir_name, rects, annotations, 
+                       bounding_boxes_list, ax_video, fig)
+    except ValueError:
+        frame_textbox.set_val(str(frame_number))
+
+
+def handle_prev_frame(frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
+                     pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig):
+    '''
+    Handle previous frame button click.
+    
+    INPUTS:
+    - frame_textbox: TextBox. The frame number text box widget.
+    - Other parameters: Same as in update_play function.
+    '''
+    current = int(frame_textbox.text)
+    if current > search_around_frames[i][0]:
+        new_frame = str(current - 1)
+        frame_textbox.set_val(new_frame)
+        handle_frame_change(new_frame, current, frame_textbox, cap, ax_video, frame_to_json,
+                          pose_dir, json_dir_name, rects, annotations, bounding_boxes_list,
+                          fig, search_around_frames, i)
+
+
+def handle_next_frame(frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
+                     pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig):
+    '''
+    Handle next frame button click.
+    
+    INPUTS:
+    - frame_textbox: TextBox. The frame number text box widget.
+    - Other parameters: Same as in update_play function.
+    '''
+    current = int(frame_textbox.text)
+    if current < search_around_frames[i][1]:
+        new_frame = str(current + 1)
+        frame_textbox.set_val(new_frame)
+        handle_frame_change(new_frame, current, frame_textbox, cap, ax_video, frame_to_json,
+                          pose_dir, json_dir_name, rects, annotations, bounding_boxes_list,
+                          fig, search_around_frames, i)
+
+
+def handle_key_press(event, frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
+                    pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig):
+    '''
+    Handle keyboard navigation events.
+    
+    INPUTS:
+    - event: Event. The keyboard event.
+    - Other parameters: Same as in update_play function.
+    '''
+    if event.key == 'left':
+        handle_prev_frame(frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
+                         pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig)
+    elif event.key == 'right':
+        handle_next_frame(frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
+                         pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig)
