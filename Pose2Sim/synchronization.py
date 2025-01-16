@@ -369,47 +369,71 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
         # Initialize plot with a larger figure and two subplots
         frame_height, _ = frame_rgb.shape[:2]
         fig_height = frame_height/250
-        fig = plt.figure(figsize=(12, fig_height))  # 더 넓은 figure
+        fig = plt.figure(figsize=(12, fig_height)) 
         
         # Main video display (left side)
-        ax_video = plt.axes([0.05, 0.2, 0.6, 0.7])  # 비디오 영역 조정
+        ax_video = plt.axes([0.05, 0.2, 0.6, 0.7])
         ax_video.imshow(frame_rgb)
-        ax_video.set_title(f'Camera name: {cam_name}', fontsize=10, pad=10)
+        ax_video.set_title(f'Camera name: {cam_name}', fontsize=12, pad=10)
         ax_video.axis('off')
 
         # Keypoints selection area (right side)
-        ax_keypoints = plt.axes([0.7, 0.2, 0.25, 0.7])
+        ax_keypoints = plt.axes([0.7, 0.2, 0.2, 0.7])
         
         # Define relative positions for keypoints in human form
-        keypoints_positions = {
-            # Head
-            'Head': (0.5, 0.8),
-            'Neck': (0.5, 0.7),
-            'Nose': (0.5, 0.75),           
-            # Torso
-            'Hip': (0.5, 0.3),
-            'RHip': (0.4, 0.3),
-            'LHip': (0.6, 0.3),          
-            # Right side
-            'RShoulder': (0.4, 0.7),
-            'RElbow': (0.3, 0.6),
-            'RWrist': (0.2, 0.5),
-            'RKnee': (0.35, 0.2),
-            'RAnkle': (0.35, 0.05),
-            'RSmallToe': (0.3, 0.0),
-            'RBigToe': (0.4, 0.0),
-            'RHeel': (0.35, 0.02),
-            
-            # Left side
-            'LShoulder': (0.6, 0.7),
-            'LElbow': (0.7, 0.6),
-            'LWrist': (0.8, 0.5),
-            'LKnee': (0.65, 0.2),
-            'LAnkle': (0.65, 0.05),
-            'LSmallToe': (0.7, 0.0),
-            'LBigToe': (0.6, 0.0),
-            'LHeel': (0.65, 0.02)
-        }
+        if 'RBigToe' and 'LBigToe' in keypoints_names: # with feet (e.g. BodyWithFeet, WholeBody)
+            keypoints_positions = {
+                # Head
+                'Head': (0.40, 0.85),
+                'Neck': (0.40, 0.75),
+                'Nose': (0.40, 0.80),           
+                # Torso
+                'Hip': (0.40, 0.42),
+                'RHip': (0.28, 0.42),
+                'LHip': (0.52, 0.42),          
+                # Right side
+                'RShoulder': (0.25, 0.75),
+                'RElbow': (0.2, 0.65),
+                'RWrist': (0.1, 0.50),
+                'RKnee': (0.25, 0.25),
+                'RAnkle': (0.25, 0.05),
+                'RSmallToe': (0.20, 0.0),
+                'RBigToe': (0.30, 0.0),
+                'RHeel': (0.25, 0.02),
+
+                # Left side
+                'LShoulder': (0.55, 0.75),
+                'LElbow': (0.6, 0.65),
+                'LWrist': (0.7, 0.50),
+                'LKnee': (0.55, 0.25),
+                'LAnkle': (0.55, 0.05),
+                'LSmallToe': (0.60, 0.0),
+                'LBigToe': (0.50, 0.0),
+                'LHeel': (0.55, 0.02)
+            }
+        else: # without feet (e.g. Body)
+            keypoints_positions = {
+                # Head
+                'Head': (0.40, 0.95),
+                'Neck': (0.40, 0.85),
+                'Nose': (0.40, 0.90),           
+                # Torso
+                'Hip': (0.40, 0.45),
+                'RHip': (0.30, 0.45),
+                'LHip': (0.50, 0.45),          
+                # Right side
+                'RShoulder': (0.30, 0.85),
+                'RElbow': (0.20, 0.75),
+                'RWrist': (0.10, 0.65),
+                'RKnee': (0.25, 0.35),
+                'RAnkle': (0.25, 0.20),
+                # Left side
+                'LShoulder': (0.50, 0.85),
+                'LElbow': (0.60, 0.75),
+                'LWrist': (0.70, 0.65),
+                'LKnee': (0.55, 0.35),
+                'LAnkle': (0.55, 0.20),
+            }
 
         # Create x, y coordinates
         keypoints_x = []
@@ -432,11 +456,10 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
             keypoint_texts.append(text)
 
         # Add toggle labels button
-        ax_toggle = plt.axes([0.775, 0.2, 0.1, 0.04])  # 키포인트 영역 아래에 버튼 배치
+        ax_toggle = plt.axes([0.74, 0.1, 0.1, 0.04])
         btn_toggle = Button(ax_toggle, 'Toggle Labels')
         btn_toggle.on_clicked(lambda event: handle_toggle_labels(event, keypoint_texts, show_labels))
 
-        ax_keypoints.set_title('Click keypoints to select', pad=10)
         ax_keypoints.set_xlim(0, 1)
         ax_keypoints.set_ylim(-0.1, 1)
         ax_keypoints.axis('off')
