@@ -294,19 +294,223 @@ def handle_ok_button():
     plt.close()
 
 
-def handle_toggle_labels(event, keypoint_texts, show_labels):
+def handle_toggle_labels(event, keypoint_texts, containers, btn_toggle):
     '''
     Handle toggle labels button click.
     
     INPUTS:
-    - event: The button click event.
-    - keypoint_texts: List of text objects showing keypoint labels.
-    - show_labels: List containing boolean flag for label visibility.
+    - event: The button click event
+    - keypoint_texts: List of text objects showing keypoint labels
+    - containers: Dictionary containing UI state
+    - btn_toggle: The toggle button object
     '''
-    show_labels[0] = not show_labels[0]  # Toggle visibility state
+    containers['show_labels'][0] = not containers['show_labels'][0]  # Toggle visibility state
     for text in keypoint_texts:
-        text.set_visible(show_labels[0])
+        text.set_visible(containers['show_labels'][0])
+    # Update button text
+    btn_toggle.label.set_text('Hide names' if containers['show_labels'][0] else 'Show names')
     plt.draw()
+
+
+def on_pick_keypoint(event, keypoints_names, selected_keypoints, scatter, keypoints_to_consider_container, fig, selected_text):
+    '''
+    Handle keypoint selection when a point is clicked in the keypoint visualization.
+    
+    INPUTS:
+    - event: The pick event from matplotlib
+    - keypoints_names: list of str. Names of all keypoints
+    - selected_keypoints: list of str. Currently selected keypoints
+    - scatter: matplotlib scatter plot object
+    - keypoints_to_consider_container: list containing the selected keypoints
+    - fig: matplotlib figure object
+    - selected_text: Text object to update selected keypoints display
+    
+    OUTPUTS:
+    - None. Updates the scatter plot and keypoints container in place.
+    '''
+    ind = event.ind[0]
+    keypoint = keypoints_names[ind]
+    
+    if keypoint in selected_keypoints:
+        selected_keypoints.remove(keypoint)
+    else:
+        selected_keypoints.append(keypoint)
+        
+    # Update scatter plot colors
+    scatter.set_facecolors([('red' if n in selected_keypoints else 'blue') 
+                          for n in keypoints_names])
+    
+    # Update container
+    keypoints_to_consider_container[0] = selected_keypoints
+    
+    # Update selected keypoints display
+    if selected_keypoints:
+        selected_text.set_text('Selected: ' + ', '.join(selected_keypoints))
+    else:
+        selected_text.set_text('Selected: None')
+    
+    # Redraw
+    fig.canvas.draw_idle()
+
+
+def init_person_selection_ui(frame_rgb, keypoints_names, cam_name, frame_number, search_around_frames, cam_index, selected_keypoints=None, is_first_camera=True):
+    '''
+    Initialize the UI for person and keypoint selection.
+    
+    INPUTS:
+    - frame_rgb: numpy array. The RGB frame to display
+    - keypoints_names: list of str. Names of keypoints
+    - cam_name: str. Name of the camera
+    - frame_number: int. Initial frame number
+    - search_around_frames: list of tuples. Frame ranges for each camera
+    - cam_index: int. Current camera index
+    - selected_keypoints: list of str. Previously selected keypoints (for non-first cameras)
+    - is_first_camera: bool. Whether this is the first camera being processed
+    '''
+    # Initialize figure and axes
+    frame_height, _ = frame_rgb.shape[:2]
+    fig_height = frame_height/250
+    fig = plt.figure(figsize=(12, fig_height))
+    
+    # Main video display (left side) - reduced width from 0.6 to 0.5
+    ax_video = plt.axes([0.05, 0.2, 0.5, 0.7])  # width changed from 0.6 to 0.5
+    ax_video.imshow(frame_rgb)
+    ax_video.set_title(f'Camera name: {cam_name}', fontsize=12, pad=10)
+    ax_video.axis('off')
+    
+    # Add frame slider below video - updated styling
+    ax_slider = plt.axes([ax_video.get_position().x0,  
+                         0.15,
+                         ax_video.get_position().width,
+                         0.02])
+    frame_slider = Slider(
+        ax=ax_slider,
+        label='',
+        valmin=search_around_frames[cam_index][0],
+        valmax=search_around_frames[cam_index][1],
+        valinit=frame_number,
+        valstep=1,
+        valfmt=None 
+    )
+
+    # Customize slider appearance
+    frame_slider.poly.set_edgecolor((0, 0, 0, 0.5))
+    frame_slider.poly.set_facecolor('lightblue')
+    frame_slider.poly.set_linewidth(1)
+    
+    # Hide value text
+    frame_slider.valtext.set_visible(False)  
+    
+    # Keypoints selection area (right side) - moved left and increased width
+    ax_keypoints = plt.axes([0.6, 0.2, 0.25, 0.7])  # x position changed from 0.7 to 0.6, width increased
+    
+    # Add title for keypoints selection area
+    ax_keypoints.set_title('Select keypoints to consider', fontsize=12, pad=10)
+    
+    # Define keypoints positions based on model type
+    if 'RBigToe' in keypoints_names and 'LBigToe' in keypoints_names:  # with feet
+        keypoints_positions = {
+            'Head': (0.50, 0.85), 'Neck': (0.50, 0.75), 'Nose': (0.50, 0.80),
+            'Hip': (0.50, 0.42), 'RHip': (0.38, 0.42), 'LHip': (0.62, 0.42),
+            'RShoulder': (0.35, 0.75), 'RElbow': (0.30, 0.65), 'RWrist': (0.20, 0.50),
+            'RKnee': (0.35, 0.25), 'RAnkle': (0.35, 0.05),
+            'RSmallToe': (0.30, 0.0), 'RBigToe': (0.40, 0.0), 'RHeel': (0.35, 0.02),
+            'LShoulder': (0.65, 0.75), 'LElbow': (0.70, 0.65), 'LWrist': (0.80, 0.50),
+            'LKnee': (0.65, 0.25), 'LAnkle': (0.65, 0.05),
+            'LSmallToe': (0.70, 0.0), 'LBigToe': (0.60, 0.0), 'LHeel': (0.65, 0.02)
+        }
+    else:  # without feet
+        keypoints_positions = {
+            'Head': (0.50, 0.95), 'Neck': (0.50, 0.85), 'Nose': (0.50, 0.90),
+            'Hip': (0.50, 0.45), 'RHip': (0.40, 0.45), 'LHip': (0.60, 0.45),
+            'RShoulder': (0.40, 0.85), 'RElbow': (0.30, 0.75), 'RWrist': (0.20, 0.65),
+            'RKnee': (0.35, 0.35), 'RAnkle': (0.35, 0.20),
+            'LShoulder': (0.60, 0.85), 'LElbow': (0.70, 0.75), 'LWrist': (0.80, 0.65),
+            'LKnee': (0.65, 0.35), 'LAnkle': (0.65, 0.20)
+        }
+    
+    # Create x, y coordinates for keypoints
+    keypoints_x = []
+    keypoints_y = []
+    for name in keypoints_names:
+        pos = keypoints_positions.get(name, (0.5, 0.5))
+        keypoints_x.append(pos[0])
+        keypoints_y.append(pos[1])
+    
+    # Plot keypoints
+    scatter = ax_keypoints.scatter(keypoints_x, keypoints_y, 
+                                 c=['red' if name in (selected_keypoints or []) else 'blue' for name in keypoints_names], 
+                                 picker=is_first_camera)
+    keypoint_texts = []
+    for x, y, name in zip(keypoints_x, keypoints_y, keypoints_names):
+        text = ax_keypoints.text(x + 0.02, y, name, va='center', fontsize=8)
+        text.set_visible(False)
+        keypoint_texts.append(text)
+    
+    ax_keypoints.set_xlim(0, 1)
+    ax_keypoints.set_ylim(-0.1, 1)
+    ax_keypoints.axis('off')
+    
+    # Add selected keypoints display area below keypoints
+    ax_selected = plt.axes([ax_keypoints.get_position().x0,
+                          0.1, 
+                          ax_keypoints.get_position().width,
+                          0.04])
+    ax_selected.axis('off')
+    selected_text = ax_selected.text(0.0, 0.5, 'Selected: None\nNote: Please select keypoints by clicking on them\nNote: Keypoints selected from the first camera will be used', 
+                                       va='center', fontsize=10, wrap=True)
+    
+    # Initialize controls - adjusted positions
+    controls = {}
+    controls['person_textbox'] = TextBox(plt.axes([0.25, 0.1, 0.1, 0.04]), 
+                                       'Synchronize on person number', initial='0')
+    controls['frame_textbox'] = TextBox(plt.axes([0.4, 0.1, 0.1, 0.04]), 
+                                      'Frame', initial=str(frame_number))
+    controls['btn_prev'] = plt.Button(plt.axes([0.515, 0.1, 0.02, 0.04]), '<')
+    controls['btn_next'] = plt.Button(plt.axes([0.54, 0.1, 0.02, 0.04]), '>')
+    controls['btn_ok'] = plt.Button(plt.axes([0.565, 0.1, 0.03, 0.04]), 'OK')
+    
+    # Move toggle button to the right of keypoints title
+    toggle_btn_width = 0.06
+    toggle_btn_height = 0.035
+    toggle_btn_x = ax_keypoints.get_position().x0 + ax_keypoints.get_position().width - 0.02
+    toggle_btn_y = ax_keypoints.get_position().y1 + 0.009
+    controls['btn_toggle'] = Button(plt.axes([toggle_btn_x, toggle_btn_y, toggle_btn_width, toggle_btn_height]), 'Show names')  # 초기 버튼 텍스트 변경
+    controls['btn_toggle'].label.set_fontsize(8)
+    
+    # Initialize containers
+    containers = {
+        'selected_keypoints': selected_keypoints if selected_keypoints is not None else [],
+        'show_labels': [False],
+        'rects': [],
+        'annotations': [],
+        'selected_text': selected_text
+    }
+    
+    # Add slider to controls
+    controls['frame_slider'] = frame_slider
+    
+    # Update selected keypoints text if keypoints were previously selected
+    if selected_keypoints:
+        selected_text.set_text('Selected: ' + ', '.join(selected_keypoints))
+
+    # Only connect toggle button handler for first camera
+    if is_first_camera:
+        controls['btn_toggle'].on_clicked(lambda event: handle_toggle_labels(event, keypoint_texts, containers, controls['btn_toggle']))
+        scatter.set_picker(True)  # 첫 번째 카메라에서만 picker 활성화
+    else:
+        controls['btn_toggle'].set_active(False)  # 버튼 비활성화
+        controls['btn_toggle'].label.set_alpha(0.5)  # 버튼 텍스트 흐리게
+
+    return {
+        'fig': fig,
+        'ax_video': ax_video,
+        'ax_keypoints': ax_keypoints,
+        'scatter': scatter,
+        'keypoint_texts': keypoint_texts,
+        'controls': controls,
+        'containers': containers
+    }
 
 
 def select_person(vid_or_img_files, cam_names, json_files_names_range, search_around_frames, pose_dir, json_dirs_names, keypoints_names):
@@ -338,10 +542,16 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
     except: # image directories
         video_files_dict = {cam_name: files for cam_name in cam_names for files in vid_or_img_files if cam_name in os.path.basename(files[0])}
 
+    selected_keypoints = None  # Store selected keypoints from first camera
+    first_camera_keypoints = None  # Store keypoints_to_consider from first camera
+    
     for i, cam_name in enumerate(cam_names):
         # Initialize containers for this camera
-        selected_idx_container = [0]  # Container for selected person index
-        keypoints_to_consider_container = ['R Wrist']  # Container for selected keypoints
+        selected_idx_container = [0]
+        if i == 0:
+            keypoints_to_consider_container = ['R Wrist']  # 첫 번째 카메라에서만 초기값 설정
+        else:
+            keypoints_to_consider_container = first_camera_keypoints  # 이후 카메라는 첫 번째 카메라의 값 사용
         
         vid_or_img_files_cam = video_files_dict.get(cam_name)
         if not vid_or_img_files_cam:
@@ -366,167 +576,76 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
                 cap.release()
             continue
         
-        # Initialize plot with a larger figure and two subplots
-        frame_height, _ = frame_rgb.shape[:2]
-        fig_height = frame_height/250
-        fig = plt.figure(figsize=(12, fig_height)) 
+        # Initialize UI with frame range and previous keypoint selection
+        ui = init_person_selection_ui(frame_rgb, keypoints_names, cam_name, frame_number, 
+                                    search_around_frames, i, 
+                                    selected_keypoints=selected_keypoints,
+                                    is_first_camera=(i==0))
         
-        # Main video display (left side)
-        ax_video = plt.axes([0.05, 0.2, 0.6, 0.7])
-        ax_video.imshow(frame_rgb)
-        ax_video.set_title(f'Camera name: {cam_name}', fontsize=12, pad=10)
-        ax_video.axis('off')
-
-        # Keypoints selection area (right side)
-        ax_keypoints = plt.axes([0.7, 0.2, 0.2, 0.7])
+        # Add slider update handler
+        def update_frame(val):
+            frame_num = int(val)
+            ui['controls']['frame_textbox'].set_val(str(frame_num))
+            handle_frame_change(str(frame_num), frame_number, ui['controls']['frame_textbox'], 
+                              cap, ui['ax_video'], frame_to_json, pose_dir, json_dirs_names[i],
+                              ui['containers']['rects'], ui['containers']['annotations'],
+                              bounding_boxes_list, ui['fig'], search_around_frames, i)
         
-        # Define relative positions for keypoints in human form
-        if 'RBigToe' and 'LBigToe' in keypoints_names: # with feet (e.g. BodyWithFeet, WholeBody)
-            keypoints_positions = {
-                # Head
-                'Head': (0.40, 0.85),
-                'Neck': (0.40, 0.75),
-                'Nose': (0.40, 0.80),           
-                # Torso
-                'Hip': (0.40, 0.42),
-                'RHip': (0.28, 0.42),
-                'LHip': (0.52, 0.42),          
-                # Right side
-                'RShoulder': (0.25, 0.75),
-                'RElbow': (0.2, 0.65),
-                'RWrist': (0.1, 0.50),
-                'RKnee': (0.25, 0.25),
-                'RAnkle': (0.25, 0.05),
-                'RSmallToe': (0.20, 0.0),
-                'RBigToe': (0.30, 0.0),
-                'RHeel': (0.25, 0.02),
-
-                # Left side
-                'LShoulder': (0.55, 0.75),
-                'LElbow': (0.6, 0.65),
-                'LWrist': (0.7, 0.50),
-                'LKnee': (0.55, 0.25),
-                'LAnkle': (0.55, 0.05),
-                'LSmallToe': (0.60, 0.0),
-                'LBigToe': (0.50, 0.0),
-                'LHeel': (0.55, 0.02)
-            }
-        else: # without feet (e.g. Body)
-            keypoints_positions = {
-                # Head
-                'Head': (0.40, 0.95),
-                'Neck': (0.40, 0.85),
-                'Nose': (0.40, 0.90),           
-                # Torso
-                'Hip': (0.40, 0.45),
-                'RHip': (0.30, 0.45),
-                'LHip': (0.50, 0.45),          
-                # Right side
-                'RShoulder': (0.30, 0.85),
-                'RElbow': (0.20, 0.75),
-                'RWrist': (0.10, 0.65),
-                'RKnee': (0.25, 0.35),
-                'RAnkle': (0.25, 0.20),
-                # Left side
-                'LShoulder': (0.50, 0.85),
-                'LElbow': (0.60, 0.75),
-                'LWrist': (0.70, 0.65),
-                'LKnee': (0.55, 0.35),
-                'LAnkle': (0.55, 0.20),
-            }
-
-        # Create x, y coordinates
-        keypoints_x = []
-        keypoints_y = []
-        for name in keypoints_names:
-            pos = keypoints_positions.get(name, (0.5, 0.5))
-            keypoints_x.append(pos[0])
-            keypoints_y.append(pos[1])
-
-        selected_keypoints = []
-        show_labels = [True]  # Container for label visibility state
-        keypoint_texts = []  # Store text objects
-
-        # Plot keypoints as scatter points
-        scatter = ax_keypoints.scatter(keypoints_x, keypoints_y, c='blue', picker=True)
+        ui['controls']['frame_slider'].on_changed(update_frame)
         
-        # Add keypoint labels
-        for x, y, name in zip(keypoints_x, keypoints_y, keypoints_names):
-            text = ax_keypoints.text(x + 0.02, y, name, va='center', fontsize=8)
-            keypoint_texts.append(text)
-
-        # Add toggle labels button
-        ax_toggle = plt.axes([0.74, 0.1, 0.1, 0.04])
-        btn_toggle = Button(ax_toggle, 'Toggle Labels')
-        btn_toggle.on_clicked(lambda event: handle_toggle_labels(event, keypoint_texts, show_labels))
-
-        ax_keypoints.set_xlim(0, 1)
-        ax_keypoints.set_ylim(-0.1, 1)
-        ax_keypoints.axis('off')
-
-        def on_pick(event):
-            ind = event.ind[0]
-            keypoint = keypoints_names[ind]
-            if keypoint in selected_keypoints:
-                selected_keypoints.remove(keypoint)
-                scatter.set_facecolors([('blue' if n not in selected_keypoints else 'red') 
-                                      for n in keypoints_names])
-            else:
-                selected_keypoints.append(keypoint)
-                scatter.set_facecolors([('red' if n in selected_keypoints else 'blue') 
-                                      for n in keypoints_names])
-            keypoints_to_consider_container[0] = selected_keypoints
-            fig.canvas.draw_idle()
-
-        fig.canvas.mpl_connect('pick_event', on_pick)
-
-        # Controls at the bottom
-        ax_person = plt.axes([0.3, 0.1, 0.1, 0.04])
-        person_textbox = TextBox(ax_person, 'Synchronize on person number', initial='0')
+        # Update frame textbox to also update slider
+        def update_textbox_and_slider(text):
+            handle_frame_change(text, frame_number, ui['controls']['frame_textbox'], cap, ui['ax_video'],
+                              frame_to_json, pose_dir, json_dirs_names[i], ui['containers']['rects'],
+                              ui['containers']['annotations'], bounding_boxes_list, ui['fig'],
+                              search_around_frames, i)
+            try:
+                frame_num = int(text)
+                if search_around_frames[i][0] <= frame_num <= search_around_frames[i][1]:
+                    ui['controls']['frame_slider'].set_val(frame_num)
+            except ValueError:
+                pass
         
-        # Frame number text box
-        ax_frame = plt.axes([0.45, 0.1, 0.1, 0.04])
-        frame_textbox = TextBox(ax_frame, 'Frame', initial=str(frame_number))
+        ui['controls']['frame_textbox'].on_submit(update_textbox_and_slider)
 
-        # Draw bounding boxes and annotations
-        rects, annotations = [], []
-        draw_bounding_boxes_and_annotations(ax_video, bounding_boxes_list, rects, annotations)
-
-        # Add hover event handler
-        fig.canvas.mpl_connect('motion_notify_event', 
-            lambda event: on_hover(event, fig, rects, annotations, bounding_boxes_list))
-
+        # Connect event handlers
+        if i == 0:  # 첫 번째 카메라에서만 pick_event 연결
+            ui['fig'].canvas.mpl_connect('pick_event', 
+                lambda event: on_pick_keypoint(event, keypoints_names, ui['containers']['selected_keypoints'], 
+                                             ui['scatter'], keypoints_to_consider_container, ui['fig'], 
+                                             ui['containers']['selected_text']))
+                                         
+        ui['fig'].canvas.mpl_connect('motion_notify_event', 
+            lambda event: on_hover(event, ui['fig'], ui['containers']['rects'], 
+                                 ui['containers']['annotations'], bounding_boxes_list))
+                                 
         # Add click event handler
-        fig.canvas.mpl_connect('button_press_event', 
-            lambda event: on_click(event, ax_video, bounding_boxes_list, selected_idx_container, person_textbox))
+        ui['fig'].canvas.mpl_connect('button_press_event', 
+            lambda event: on_click(event, ui['ax_video'], bounding_boxes_list, selected_idx_container, ui['controls']['person_textbox']))
 
         # Event handlers connection
-        person_textbox.on_submit(lambda text: handle_person_change(text, selected_idx_container, person_textbox))
-        frame_textbox.on_submit(lambda text: handle_frame_change(text, frame_number, frame_textbox, cap, ax_video, 
-                               frame_to_json, pose_dir, json_dirs_names[i], rects, annotations, 
-                               bounding_boxes_list, fig, search_around_frames, i))
+        ui['controls']['person_textbox'].on_submit(lambda text: handle_person_change(text, selected_idx_container, ui['controls']['person_textbox']))
+        ui['controls']['frame_textbox'].on_submit(lambda text: handle_frame_change(text, frame_number, ui['controls']['frame_textbox'], cap, ui['ax_video'],
+                               frame_to_json, pose_dir, json_dirs_names[i], ui['containers']['rects'], ui['containers']['annotations'], 
+                               bounding_boxes_list, ui['fig'], search_around_frames, i))
 
         # Navigation buttons and OK button
-        btn_prev = plt.axes([0.565, 0.1, 0.02, 0.04])
-        btn_next = plt.axes([0.59, 0.1, 0.02, 0.04])
-        btn_ok = plt.axes([0.615, 0.1, 0.03, 0.04])
+        btn_prev = ui['controls']['btn_prev']
+        btn_next = ui['controls']['btn_next']
+        btn_ok = ui['controls']['btn_ok']
         
-        btn_prev = plt.Button(btn_prev, '<')
-        btn_next = plt.Button(btn_next, '>')
-        btn_ok = plt.Button(btn_ok, 'OK')
-
-        btn_prev.on_clicked(lambda event: handle_prev_frame(frame_textbox, search_around_frames, i, cap, ax_video,
-                           frame_to_json, pose_dir, json_dirs_names[i], rects, annotations,
-                           bounding_boxes_list, fig))
-        btn_next.on_clicked(lambda event: handle_next_frame(frame_textbox, search_around_frames, i, cap, ax_video,
-                           frame_to_json, pose_dir, json_dirs_names[i], rects, annotations,
-                           bounding_boxes_list, fig))
+        btn_prev.on_clicked(lambda event: handle_prev_frame(ui['controls']['frame_textbox'], search_around_frames, i, cap, ui['ax_video'],
+                           frame_to_json, pose_dir, json_dirs_names[i], ui['containers']['rects'], ui['containers']['annotations'],
+                           bounding_boxes_list, ui['fig']))
+        btn_next.on_clicked(lambda event: handle_next_frame(ui['controls']['frame_textbox'], search_around_frames, i, cap, ui['ax_video'],
+                           frame_to_json, pose_dir, json_dirs_names[i], ui['containers']['rects'], ui['containers']['annotations'],
+                           bounding_boxes_list, ui['fig']))
         btn_ok.on_clicked(lambda event: handle_ok_button())
 
         # Keyboard navigation
-        fig.canvas.mpl_connect('key_press_event', lambda event: handle_key_press(event, frame_textbox,
-                              search_around_frames, i, cap, ax_video, frame_to_json, pose_dir,
-                              json_dirs_names[i], rects, annotations, bounding_boxes_list, fig))
+        ui['fig'].canvas.mpl_connect('key_press_event', lambda event: handle_key_press(event, ui['controls']['frame_textbox'],
+                              search_around_frames, i, cap, ui['ax_video'], frame_to_json, pose_dir,
+                              json_dirs_names[i], ui['containers']['rects'], ui['containers']['annotations'], bounding_boxes_list, ui['fig']))
 
         # Show plot and wait for user input (window will close only when OK is clicked)
         plt.show()
@@ -534,12 +653,17 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
 
         # Store selected values after OK button is clicked
         selected_id_list.append(selected_idx_container[0])
-        keypoints_to_consider.append(keypoints_to_consider_container[0])
-        approx_time_maxspeed.append(int(frame_textbox.text))
+        keypoints_to_consider.append(keypoints_to_consider_container[0] if i == 0 else keypoints_to_consider_container)
+        approx_time_maxspeed.append(int(ui['controls']['frame_textbox'].text))
         
         logging.info(f'--> Camera #{i}: selected person #{selected_idx_container[0]} '
                     f'with keypoints {keypoints_to_consider_container[0]} '
-                    f'at frame #{frame_textbox.text}')
+                    f'at frame #{ui["controls"]["frame_textbox"].text}')
+
+        # Store selected keypoints and keypoints_to_consider from first camera
+        if i == 0:
+            selected_keypoints = ui['containers']['selected_keypoints']
+            first_camera_keypoints = keypoints_to_consider_container[0]
 
     return selected_id_list, keypoints_to_consider, approx_time_maxspeed
 
