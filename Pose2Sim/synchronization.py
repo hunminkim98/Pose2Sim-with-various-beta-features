@@ -362,7 +362,7 @@ def on_pick_keypoint(event, keypoints_names, selected_keypoints, scatter, keypoi
         selected_keypoints.append(keypoint)
         
     # Update scatter plot colors
-    scatter.set_facecolors([('red' if n in selected_keypoints else 'blue') 
+    scatter.set_facecolors([('yellow' if n in selected_keypoints else 'silver') 
                           for n in keypoints_names])
     
     # Update container
@@ -391,10 +391,12 @@ def select_keypoints(keypoints_names):
     '''
     # Create figure for keypoint selection only
     fig = plt.figure(figsize=(6, 8))
+    fig.patch.set_facecolor('black')
     
     # Keypoints selection area
     ax_keypoints = plt.axes([0.1, 0.2, 0.8, 0.7])
-    ax_keypoints.set_title('Select keypoints to consider for all cameras', fontsize=12, pad=10)
+    ax_keypoints.set_facecolor('black')
+    ax_keypoints.set_title('Select keypoints to consider for all cameras', fontsize=12, pad=10, color='white')
     
     # Define keypoints positions
     if 'RBigToe' in keypoints_names and 'LBigToe' in keypoints_names:  # with feet
@@ -428,12 +430,12 @@ def select_keypoints(keypoints_names):
     
     # Plot keypoints
     selected_keypoints = []
-    scatter = ax_keypoints.scatter(keypoints_x, keypoints_y, c='blue', picker=True)
+    scatter = ax_keypoints.scatter(keypoints_x, keypoints_y, c='silver', picker=True)
     
     # Add keypoint labels
     keypoint_texts = []
     for x, y, name in zip(keypoints_x, keypoints_y, keypoints_names):
-        text = ax_keypoints.text(x + 0.02, y, name, va='center', fontsize=8)
+        text = ax_keypoints.text(x + 0.02, y, name, va='center', fontsize=8, color='white')
         text.set_visible(False)  # 초기에는 숨김
         keypoint_texts.append(text)
     
@@ -444,8 +446,9 @@ def select_keypoints(keypoints_names):
     # Add selected keypoints display area
     ax_selected = plt.axes([0.1, 0.1, 0.8, 0.04])
     ax_selected.axis('off')
+    ax_selected.set_facecolor('black')
     selected_text = ax_selected.text(0.0, 0.5, 'Selected: None\nClick on keypoints to select them', 
-                                   va='center', fontsize=10, wrap=True)
+                                   va='center', fontsize=10, wrap=True, color='white')
     
     # Add Toggle and OK buttons side by side in the center
     btn_width = 0.16  # 버튼 너비 증가
@@ -479,12 +482,12 @@ def select_keypoints(keypoints_names):
         
         if keypoint in selected_keypoints:
             selected_keypoints.remove(keypoint)
-            scatter.set_facecolors(['red' if n in selected_keypoints else 'blue' for n in keypoints_names])
+            scatter.set_facecolors(['yellow' if n in selected_keypoints else 'silver' for n in keypoints_names])
             # Update text weight to normal
             keypoint_texts[ind].set_fontweight('normal')
         else:
             selected_keypoints.append(keypoint)
-            scatter.set_facecolors(['red' if n in selected_keypoints else 'blue' for n in keypoints_names])
+            scatter.set_facecolors(['yellow' if n in selected_keypoints else 'silver' for n in keypoints_names])
             # Update text weight to bold
             keypoint_texts[ind].set_fontweight('bold')
         
@@ -516,18 +519,21 @@ def init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_aro
     frame_height, _ = frame_rgb.shape[:2]
     fig_height = frame_height/250
     fig = plt.figure(figsize=(8, fig_height))
+    fig.patch.set_facecolor('black')
     
     # Main video display
     ax_video = plt.axes([0.1, 0.2, 0.8, 0.7])
     ax_video.imshow(frame_rgb)
-    ax_video.set_title(f'Camera name: {cam_name}\nSelect person ID and approximate frame', fontsize=12, pad=10)
+    ax_video.set_title(f'Camera name: {cam_name}\nSelect person ID and approximate frame', fontsize=12, pad=10, color='white')
     ax_video.axis('off')
+    ax_video.set_facecolor('black')
     
     # Add frame slider
     ax_slider = plt.axes([ax_video.get_position().x0,  
                          0.15,
                          ax_video.get_position().width,
                          0.04])
+    ax_slider.set_facecolor('black')
     frame_slider = Slider(
         ax=ax_slider,
         label='',
@@ -539,7 +545,7 @@ def init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_aro
     )
 
     # Customize slider appearance
-    frame_slider.poly.set_edgecolor((0, 0, 0, 0.5))
+    frame_slider.poly.set_edgecolor((1, 1, 1, 0.5))  # white edge with transparency
     frame_slider.poly.set_facecolor('lightblue')
     frame_slider.poly.set_linewidth(1)
     frame_slider.valtext.set_visible(False)
@@ -560,37 +566,66 @@ def init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_aro
     y_position = 0.08
     
     # Person number textbox
+    person_ax = plt.axes([start_x + 0.08 , y_position, textbox_width, control_height])
+    person_ax.set_facecolor('#303030')  # 어두운 회색
     controls['person_textbox'] = TextBox(
-        plt.axes([start_x + 0.08 , y_position, textbox_width, control_height]), 
+        person_ax, 
         'Person number', 
-        initial='0'
+        initial='0',
+        color='#303030',
+        hovercolor='#404040',
+        label_pad=0.1
     )
+    controls['person_textbox'].label.set_color('white')
+    controls['person_textbox'].text_disp.set_color('white')
     
     # Frame number textbox
+    frame_ax = plt.axes([start_x + textbox_width + 0.25 + btn_spacing, y_position, textbox_width, control_height])
+    frame_ax.set_facecolor('#303030')  # 어두운 회색
     controls['frame_textbox'] = TextBox(
-        plt.axes([start_x + textbox_width + 0.25 + btn_spacing, y_position, textbox_width, control_height]), 
-        ',Approximate frame', 
-        initial=str(frame_number)
+        frame_ax, 
+        'Approximate frame', 
+        initial=str(frame_number),
+        color='#303030',
+        hovercolor='#404040',
+        label_pad=0.1
     )
+    controls['frame_textbox'].label.set_color('white')
+    controls['frame_textbox'].text_disp.set_color('white')
     
     # Navigation and OK buttons
     btn_start_x = start_x + 2 * (textbox_width + btn_spacing)
     
+    prev_ax = plt.axes([btn_start_x + 0.245, y_position, btn_width, control_height])
+    prev_ax.set_facecolor('#303030')  # 어두운 회색
     controls['btn_prev'] = plt.Button(
-        plt.axes([btn_start_x + 0.245, y_position, btn_width, control_height]), 
-        '<'
+        prev_ax, 
+        '<',
+        color='#303030',
+        hovercolor='#404040'
     )
+    controls['btn_prev'].label.set_color('white')
     
+    next_ax = plt.axes([btn_start_x + btn_width + btn_spacing + 0.24, y_position, btn_width, control_height])
+    next_ax.set_facecolor('#303030')  # 어두운 회색
     controls['btn_next'] = plt.Button(
-        plt.axes([btn_start_x + btn_width + btn_spacing + 0.24, y_position, btn_width, control_height]), 
-        '>'
+        next_ax, 
+        '>',
+        color='#303030',
+        hovercolor='#404040'
     )
+    controls['btn_next'].label.set_color('white')
     
     # OK button with increased size
+    ok_ax = plt.axes([btn_start_x + 2 * (btn_width + btn_spacing) + 0.24, y_position, btn_width * 1.5, control_height])
+    ok_ax.set_facecolor('#303030')  # 어두운 회색
     controls['btn_ok'] = plt.Button(
-        plt.axes([btn_start_x + 2 * (btn_width + btn_spacing) + 0.24, y_position, btn_width * 1.5, control_height]), 
-        'OK'
+        ok_ax, 
+        'OK',
+        color='#303030',
+        hovercolor='#404040'
     )
+    controls['btn_ok'].label.set_color('white')
     
     # Initialize containers
     containers = {
@@ -711,7 +746,7 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
         ui['controls']['person_textbox'].on_submit(
             lambda text: handle_person_change(text, ui['containers']['selected_idx'], ui['controls']['person_textbox']))
 
-        # Navigation buttons and OK button
+        # Navigation and OK buttons
         btn_prev = ui['controls']['btn_prev']
         btn_next = ui['controls']['btn_next']
         btn_ok = ui['controls']['btn_ok']
