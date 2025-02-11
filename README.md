@@ -114,7 +114,7 @@ Pose2Sim stands for "OpenPose to OpenSim", as it originally used *OpenPose* inpu
 
    Once installed, open an Anaconda prompt and create a virtual environment:
    ```
-   conda create -n Pose2Sim python=3.9 -y 
+   conda create -n Pose2Sim python=3.10 -y 
    conda activate Pose2Sim
    ```
 
@@ -125,7 +125,7 @@ Install the OpenSim Python API (if you do not want to install via conda, refer [
    ```
    
 3. **Install Pose2Sim**:\
-If you don't use Anaconda, type `python -V` in terminal to make sure python>=3.9 is installed. 
+If you don't use Anaconda, type `python -V` in terminal to make sure python>=3.10 is installed. 
    - OPTION 1: **Quick install:** Open a terminal. 
        ``` cmd
        pip install pose2sim
@@ -358,9 +358,10 @@ Pose2Sim.poseEstimation()
 
 ***N.B.:* To speed up the process:**
 - Disable `display_detection` and `save_video` 
-- Increase the value of `det_frequency`. In that case, the detection is only done every `det_frequency` frames, and bounding boxes are tracked inbetween (keypoint detection is still performed on all frames)
+- Increase the value of `det_frequency`. In this case, the detection is only done every `det_frequency` frames, and bounding boxes are tracked inbetween (keypoint detection is still performed on all frames)
 - Use your GPU (See [Installation](#installation)). Slightly more involved, but often worth it. Note that the optimal device _(CPU or GPU)_ and backend for your configuration will be automatically selected, but you can also manually select them in Config.toml.
 - Run pose estimation in `lightweight` mode instead of `balanced` or `performance`. However, this will reduce the quality of results. 
+- Use `tracking_mode = 'sports2d'`: Will use the default Sports2D tracker. Unlike DeepSort, it is faster, does not require any parametrization, and is as good in non-crowded scenes. 
 
 <br>
 
