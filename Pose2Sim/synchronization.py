@@ -50,6 +50,9 @@ from anytree.importer import DictImporter
 from matplotlib.widgets import TextBox, Button
 import logging
 
+# Global matplotlib settings - remove toolbar
+plt.rcParams['toolbar'] = 'none'
+
 from Pose2Sim.common import sort_stringlist_by_last_number, bounding_boxes
 from Pose2Sim.skeletons import *
 
@@ -65,95 +68,7 @@ __email__ = "contact@david-pagnon.com"
 __status__ = "Development"
 
 
-# FUNCTIONS
-def load_frame_and_bounding_boxes(cap, frame_number, frame_to_json, pose_dir, json_dir_name):
-    '''
-    Given a video capture object or a list of image files and a frame number, 
-    load the frame (or image) and corresponding bounding boxes.
-
-    INPUTS:
-    - cap: cv2.VideoCapture object or list of image file paths.
-    - frame_number: int. The frame number to load.
-    - frame_to_json: dict. Mapping from frame numbers to JSON file names.
-    - pose_dir: str. Path to the directory containing pose data.
-    - json_dir_name: str. Name of the JSON directory for the current camera.
-
-    OUTPUTS:
-    - frame_rgb: The RGB image of the frame or image.
-    - bounding_boxes_list: List of bounding boxes for the frame/image.
-    '''
-
-    # Case 1: If input is a video file (cv2.VideoCapture object)
-    if isinstance(cap, cv2.VideoCapture):
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
-        ret, frame = cap.read()
-        if not ret:
-            return None, []
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-    # Case 2: If input is a list of image file paths
-    elif isinstance(cap, list):
-        if frame_number >= len(cap):
-            return None, []
-        image_path = cap[frame_number]
-        frame = cv2.imread(image_path)
-        if frame is None:
-            return None, []
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    
-    else:
-        raise ValueError("Input must be either a video capture object or a list of image file paths.")
-
-    # Get the corresponding JSON file for bounding boxes
-    json_file_name = frame_to_json.get(frame_number)
-    bounding_boxes_list = []
-    if json_file_name:
-        json_file_path = os.path.join(pose_dir, json_dir_name, json_file_name)
-        bounding_boxes_list.extend(bounding_boxes(json_file_path))
-
-    return frame_rgb, bounding_boxes_list
-
-
-def draw_bounding_boxes_and_annotations(ax, bounding_boxes_list, rects, annotations):
-    '''
-    Draws the bounding boxes and annotations on the given axes.
-
-    INPUTS:
-    - ax: The axes object to draw on.
-    - bounding_boxes_list: list of tuples. Each tuple contains (x_min, y_min, x_max, y_max) of a bounding box.
-    - rects: List to store rectangle patches representing bounding boxes.
-    - annotations: List to store text annotations for each bounding box.
-
-    OUTPUTS:
-    - None. Modifies rects and annotations in place.
-    '''
-
-    # Clear existing rectangles and annotations
-    for items in [rects, annotations]:
-            for item in items:
-                item.remove()
-            items.clear()
-
-    # Draw bounding boxes and annotations
-    for idx, (x_min, y_min, x_max, y_max) in enumerate(bounding_boxes_list):
-        if not np.isfinite([x_min, y_min, x_max, y_max]).all():
-            continue  # Skip invalid bounding boxes for solve issue(posx and posy should be finite values)
-
-        rect = plt.Rectangle(
-            (x_min, y_min), x_max - x_min, y_max - y_min,
-            linewidth=1, edgecolor='white', facecolor=(1, 1, 1, 0.1),
-            linestyle='-', path_effects=[patheffects.withSimplePatchShadow()], zorder=2
-        ) # add shadow
-        ax.add_patch(rect)
-        rects.append(rect)
-
-        annotation = ax.text(
-            x_min, y_min - 10, f'Person {idx}', color='white', fontsize=7, fontweight='normal',
-            bbox=dict(facecolor='black', alpha=0.5, boxstyle='round,pad=0.3'), zorder=3
-        )
-        annotations.append(annotation)
-
-
+# UI FUNCTIONS
 def reset_styles(rect, annotation):
     '''
     Resets the styles of a rectangle and its annotation to default.
@@ -172,17 +87,98 @@ def reset_styles(rect, annotation):
     annotation.set_fontsize(7)
     annotation.set_fontweight('normal')
 
+## Handlers
+def handle_ok_button():
+    '''
+    Handle OK button click. Closes the window and confirms the selection.
+    '''
+    plt.close()
 
+
+def handle_person_change(text, selected_idx_container, person_textbox):
+    '''
+    Handle changes to the person selection text box.
+    '''
+    try:
+        selected_idx_container[0] = int(text)
+    except ValueError:
+        person_textbox.set_val('0')
+        selected_idx_container[0] = 0
+
+
+def handle_frame_change(text, frame_number, frame_textbox, cap, ax_video, frame_to_json, 
+                       pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, 
+                       fig, search_around_frames, i):
+    '''
+    Handle changes to the frame number text box.
+    '''
+    try:
+        frame_num = int(text)
+        if search_around_frames[i][0] <= frame_num <= search_around_frames[i][1]:
+            update_play(cap, ax_video.images[0], frame_num, frame_to_json, 
+                       pose_dir, json_dir_name, rects, annotations, 
+                       bounding_boxes_list, ax_video, fig)
+    except ValueError:
+        frame_textbox.set_val(str(frame_number))
+
+
+def handle_prev_frame(frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
+                     pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig):
+    '''
+    Handle previous frame button click.
+    '''
+    current = int(frame_textbox.text)
+    if current > search_around_frames[i][0]:
+        new_frame = str(current - 1)
+        frame_textbox.set_val(new_frame)
+        handle_frame_change(new_frame, current, frame_textbox, cap, ax_video, frame_to_json,
+                          pose_dir, json_dir_name, rects, annotations, bounding_boxes_list,
+                          fig, search_around_frames, i)
+
+
+def handle_next_frame(frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
+                     pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig):
+    '''
+    Handle next frame button click.
+    '''
+    current = int(frame_textbox.text)
+    if current < search_around_frames[i][1]:
+        new_frame = str(current + 1)
+        frame_textbox.set_val(new_frame)
+        handle_frame_change(new_frame, current, frame_textbox, cap, ax_video, frame_to_json,
+                          pose_dir, json_dir_name, rects, annotations, bounding_boxes_list,
+                          fig, search_around_frames, i)
+
+
+def handle_key_press(event, frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
+                    pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig):
+    '''
+    Handle keyboard navigation events.
+    '''
+    if event.key == 'left':
+        handle_prev_frame(frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
+                         pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig)
+    elif event.key == 'right':
+        handle_next_frame(frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
+                         pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig)
+
+
+def handle_toggle_labels(event, keypoint_texts, containers, btn_toggle):
+    '''
+    Handle toggle labels button click.
+    '''
+    containers['show_labels'][0] = not containers['show_labels'][0]  # Toggle visibility state
+    for text in keypoint_texts:
+        text.set_visible(containers['show_labels'][0])
+    # Update button text
+    btn_toggle.label.set_text('Hide names' if containers['show_labels'][0] else 'Show names')
+    plt.draw()
+
+
+## Highlighters
 def highlight_selected_box(rect, annotation):
     '''
     Highlights a selected rectangle and its annotation with bold white style.
-
-    INPUTS:
-    - rect: Rectangle patch to highlight.
-    - annotation: Text annotation to highlight.
-
-    OUTPUTS:
-    - None. Modifies rect and annotation in place.
     '''
 
     rect.set_linewidth(2)
@@ -195,13 +191,6 @@ def highlight_selected_box(rect, annotation):
 def highlight_hover_box(rect, annotation):
     '''
     Highlights a hovered rectangle and its annotation with yellow style.
-
-    INPUTS:
-    - rect: Rectangle patch to highlight.
-    - annotation: Text annotation to highlight.
-
-    OUTPUTS:
-    - None. Modifies rect and annotation in place.
     '''
 
     rect.set_linewidth(2)
@@ -210,22 +199,11 @@ def highlight_hover_box(rect, annotation):
     annotation.set_fontsize(8)
     annotation.set_fontweight('bold')
 
-
+## on_ family
 def on_hover(event, fig, rects, annotations, bounding_boxes_list, selected_idx_container=None):
     '''
     Highlights the bounding box and annotation when the mouse hovers over a person in the plot.
     Maintains highlight on the selected person.
-    
-    INPUTS:
-    - event: The hover event.
-    - fig:  The figure object.
-    - rects: The rectangles representing bounding boxes.
-    - annotations: The annotations corresponding to each bounding box.
-    - bounding_boxes_list: List of tuples containing bounding box coordinates.
-    - selected_idx_container: List containing the selected person's index.
-
-    OUTPUTS:
-    - None. This function updates the plot in place.
     '''
 
     if event.xdata is None or event.ydata is None:
@@ -273,68 +251,6 @@ def on_click(event, ax, bounding_boxes_list, selected_idx_container, person_text
             selected_idx_container[0] = idx
             person_textbox.set_val(str(idx))  # Update the person number text box
             break
-
-
-def update_play(cap, image, frame_number, frame_to_json, pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, ax, fig):
-    '''
-    Updates the plot with a new frame.
-
-    INPUTS:
-    - cap: cv2.VideoCapture. The video capture object.
-    - image: The image object in the plot.
-    - frame_number: int. The frame number to display.
-    - frame_to_json: dict. Mapping from frame numbers to JSON file names.
-    - pose_dir: str. Path to the directory containing pose data.
-    - json_dir_name: str. Name of the JSON directory for the current camera.
-    - rects: List of rectangle patches representing bounding boxes.
-    - annotations: List of text annotations for each bounding box.
-    - bounding_boxes_list: List of tuples to store bounding boxes for the current frame.
-    - ax: The axes object of the plot.
-    - fig: The figure object containing the plot.
-
-    OUTPUTS:
-    - None. Updates the plot with the new frame, bounding boxes, and annotations.
-    '''
-
-    frame_rgb, bounding_boxes_list_new = load_frame_and_bounding_boxes(cap, frame_number, frame_to_json, pose_dir, json_dir_name)
-    if frame_rgb is None:
-        return
-
-    # Update frame image
-    image.set_data(frame_rgb)
-
-    # Update bounding boxes
-    bounding_boxes_list.clear()
-    bounding_boxes_list.extend(bounding_boxes_list_new)
-
-    # Draw bounding boxes and annotations
-    draw_bounding_boxes_and_annotations(ax, bounding_boxes_list, rects, annotations)
-    fig.canvas.draw_idle()
-
-
-def handle_ok_button():
-    '''
-    Handle OK button click. Closes the window and confirms the selection.
-    '''
-    plt.close()
-
-
-def handle_toggle_labels(event, keypoint_texts, containers, btn_toggle):
-    '''
-    Handle toggle labels button click.
-    
-    INPUTS:
-    - event: The button click event
-    - keypoint_texts: List of text objects showing keypoint labels
-    - containers: Dictionary containing UI state
-    - btn_toggle: The toggle button object
-    '''
-    containers['show_labels'][0] = not containers['show_labels'][0]  # Toggle visibility state
-    for text in keypoint_texts:
-        text.set_visible(containers['show_labels'][0])
-    # Update button text
-    btn_toggle.label.set_text('Hide names' if containers['show_labels'][0] else 'Show names')
-    plt.draw()
 
 
 def on_pick_keypoint(event, keypoints_names, selected_keypoints, scatter, keypoints_to_consider_container, fig, selected_text):
@@ -385,89 +301,157 @@ def on_pick_keypoint(event, keypoints_names, selected_keypoints, scatter, keypoi
     fig.canvas.draw_idle()
 
 
+def draw_bounding_boxes_and_annotations(ax, bounding_boxes_list, rects, annotations):
+    '''
+    Draws the bounding boxes and annotations on the given axes.
+
+    INPUTS:
+    - ax: The axes object to draw on.
+    - bounding_boxes_list: list of tuples. Each tuple contains (x_min, y_min, x_max, y_max) of a bounding box.
+    - rects: List to store rectangle patches representing bounding boxes.
+    - annotations: List to store text annotations for each bounding box.
+
+    OUTPUTS:
+    - None. Modifies rects and annotations in place.
+    '''
+
+    # Clear existing rectangles and annotations
+    for items in [rects, annotations]:
+            for item in items:
+                item.remove()
+            items.clear()
+
+    # Draw bounding boxes and annotations
+    for idx, (x_min, y_min, x_max, y_max) in enumerate(bounding_boxes_list):
+        if not np.isfinite([x_min, y_min, x_max, y_max]).all():
+            continue  # Skip invalid bounding boxes for solve issue(posx and posy should be finite values)
+
+        rect = plt.Rectangle(
+            (x_min, y_min), x_max - x_min, y_max - y_min,
+            linewidth=1, edgecolor='white', facecolor=(1, 1, 1, 0.1),
+            linestyle='-', path_effects=[patheffects.withSimplePatchShadow()], zorder=2
+        ) # add shadow
+        ax.add_patch(rect)
+        rects.append(rect)
+
+        annotation = ax.text(
+            x_min, y_min - 10, f'Person {idx}', color='white', fontsize=7, fontweight='normal',
+            bbox=dict(facecolor='black', alpha=0.5, boxstyle='round,pad=0.3'), zorder=3
+        )
+        annotations.append(annotation)
+
+
+def update_play(cap, image, frame_number, frame_to_json, pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, ax, fig):
+    '''
+    Updates the plot with a new frame.
+
+    INPUTS:
+    - cap: cv2.VideoCapture. The video capture object.
+    - image: The image object in the plot.
+    - frame_number: int. The frame number to display.
+    - frame_to_json: dict. Mapping from frame numbers to JSON file names.
+    - pose_dir: str. Path to the directory containing pose data.
+    - json_dir_name: str. Name of the JSON directory for the current camera.
+    - rects: List of rectangle patches representing bounding boxes.
+    - annotations: List of text annotations for each bounding box.
+    - bounding_boxes_list: List of tuples to store bounding boxes for the current frame.
+    - ax: The axes object of the plot.
+    - fig: The figure object containing the plot.
+
+    OUTPUTS:
+    - None. Updates the plot with the new frame, bounding boxes, and annotations.
+    '''
+
+    frame_rgb, bounding_boxes_list_new = load_frame_and_bounding_boxes(cap, frame_number, frame_to_json, pose_dir, json_dir_name)
+    if frame_rgb is None:
+        return
+
+    # Update frame image
+    image.set_data(frame_rgb)
+
+    # Update bounding boxes
+    bounding_boxes_list.clear()
+    bounding_boxes_list.extend(bounding_boxes_list_new)
+
+    # Draw bounding boxes and annotations
+    draw_bounding_boxes_and_annotations(ax, bounding_boxes_list, rects, annotations)
+    fig.canvas.draw_idle()
+
+
 def select_keypoints(keypoints_names):
     '''
     Step 1: UI for selecting keypoints only
     '''
+    # Define common text sizes
+    TITLE_SIZE = 12
+    LABEL_SIZE = 8
+    BUTTON_SIZE = 10
+    
     # Create figure for keypoint selection only
     fig = plt.figure(figsize=(6, 8))
     fig.patch.set_facecolor('black')
-    
+
     # Keypoints selection area
     ax_keypoints = plt.axes([0.1, 0.2, 0.8, 0.7])
     ax_keypoints.set_facecolor('black')
-    ax_keypoints.set_title('Select keypoints to consider for all cameras', fontsize=12, pad=10, color='white')
+    ax_keypoints.set_title('Select keypoints to synchronize on', fontsize=TITLE_SIZE, pad=10, color='white')
     
     # Define keypoints positions
     if 'RBigToe' in keypoints_names and 'LBigToe' in keypoints_names:  # with feet
         keypoints_positions = {
             'Head': (0.50, 0.85), 'Neck': (0.50, 0.75), 'Nose': (0.50, 0.80),
-            'Hip': (0.50, 0.42), 'RHip': (0.42, 0.42), 'LHip': (0.58, 0.42),  # 좁혀짐
-            'RShoulder': (0.40, 0.75), 'RElbow': (0.35, 0.65), 'RWrist': (0.25, 0.50),  # 안쪽으로
-            'RKnee': (0.40, 0.25), 'RAnkle': (0.40, 0.05),  # 안쪽으로
-            'RSmallToe': (0.35, 0.0), 'RBigToe': (0.42, 0.0), 'RHeel': (0.40, 0.02),  # 안쪽으로
-            'LShoulder': (0.60, 0.75), 'LElbow': (0.65, 0.65), 'LWrist': (0.75, 0.50),  # 안쪽으로
-            'LKnee': (0.60, 0.25), 'LAnkle': (0.60, 0.05),  # 안쪽으로
-            'LSmallToe': (0.65, 0.0), 'LBigToe': (0.58, 0.0), 'LHeel': (0.60, 0.02)  # 안쪽으로
+            'Hip': (0.50, 0.42), 'RHip': (0.42, 0.42), 'LHip': (0.58, 0.42), 
+            'RShoulder': (0.40, 0.75), 'RElbow': (0.35, 0.65), 'RWrist': (0.25, 0.50), 
+            'RKnee': (0.40, 0.25), 'RAnkle': (0.40, 0.05), 
+            'RSmallToe': (0.35, 0.0), 'RBigToe': (0.42, 0.0), 'RHeel': (0.40, 0.02), 
+            'LShoulder': (0.60, 0.75), 'LElbow': (0.65, 0.65), 'LWrist': (0.75, 0.50),
+            'LKnee': (0.60, 0.25), 'LAnkle': (0.60, 0.05), 
+            'LSmallToe': (0.65, 0.0), 'LBigToe': (0.58, 0.0), 'LHeel': (0.60, 0.02)
         }
     else:  # without feet
         keypoints_positions = {
             'Head': (0.50, 0.95), 'Neck': (0.50, 0.85), 'Nose': (0.50, 0.90),
-            'Hip': (0.50, 0.45), 'RHip': (0.42, 0.45), 'LHip': (0.58, 0.45),  # 좁혀짐
-            'RShoulder': (0.40, 0.85), 'RElbow': (0.35, 0.75), 'RWrist': (0.25, 0.65),  # 안쪽으로
-            'RKnee': (0.40, 0.35), 'RAnkle': (0.40, 0.20),  # 안쪽으로
-            'LShoulder': (0.60, 0.85), 'LElbow': (0.65, 0.75), 'LWrist': (0.75, 0.65),  # 안쪽으로
-            'LKnee': (0.60, 0.35), 'LAnkle': (0.60, 0.20)  # 안쪽으로
+            'Hip': (0.50, 0.45), 'RHip': (0.42, 0.45), 'LHip': (0.58, 0.45),
+            'RShoulder': (0.40, 0.85), 'RElbow': (0.35, 0.75), 'RWrist': (0.25, 0.65),
+            'RKnee': (0.40, 0.35), 'RAnkle': (0.40, 0.20),
+            'LShoulder': (0.60, 0.85), 'LElbow': (0.65, 0.75), 'LWrist': (0.75, 0.65), 
+            'LKnee': (0.60, 0.35), 'LAnkle': (0.60, 0.20)
         }
     
     # Create x, y coordinates for keypoints
-    keypoints_x = []
-    keypoints_y = []
-    for name in keypoints_names:
-        pos = keypoints_positions.get(name, (0.5, 0.5))
-        keypoints_x.append(pos[0])
-        keypoints_y.append(pos[1])
+    keypoints_x, keypoints_y = zip(*[keypoints_positions.get(name, (0.5, 0.5)) for name in keypoints_names])
     
     # Plot keypoints
     selected_keypoints = []
     scatter = ax_keypoints.scatter(keypoints_x, keypoints_y, c='silver', picker=True)
     
     # Add keypoint labels
-    keypoint_texts = []
-    for x, y, name in zip(keypoints_x, keypoints_y, keypoints_names):
-        text = ax_keypoints.text(x + 0.02, y, name, va='center', fontsize=8, color='white')
-        text.set_visible(False)  # 초기에는 숨김
-        keypoint_texts.append(text)
+    keypoint_texts = [ax_keypoints.text(x + 0.02, y, name, va='center', fontsize=LABEL_SIZE, color='white', visible=False)
+                      for x, y, name in zip(keypoints_x, keypoints_y, keypoints_names)]
     
     ax_keypoints.set_xlim(0, 1)
     ax_keypoints.set_ylim(-0.1, 1)
     ax_keypoints.axis('off')
     
     # Add selected keypoints display area
-    ax_selected = plt.axes([0.1, 0.1, 0.8, 0.04])
+    ax_selected = plt.axes([0.1, 0.08, 0.8, 0.04])
     ax_selected.axis('off')
     ax_selected.set_facecolor('black')
     selected_text = ax_selected.text(0.0, 0.5, 'Selected: None\nClick on keypoints to select them', 
-                                   va='center', fontsize=10, wrap=True, color='white')
+                                     va='center', fontsize=BUTTON_SIZE, wrap=True, color='white')
     
-    # Add Toggle and OK buttons side by side in the center
-    btn_width = 0.16  # 버튼 너비 증가
-    btn_height = 0.04
-    btn_y = 0.02
-    center_x = 0.5  # 중앙 위치
+    # Add buttons side by side in the center
+    btn_width, btn_height, btn_y = 0.16, 0.04, 0.02
+    center_x = 0.5  
 
-    # Toggle 버튼은 중앙에서 왼쪽으로
-    btn_toggle = plt.Button(plt.axes([center_x - btn_width - 0.01, btn_y, btn_width, btn_height]), 'Show names')
-
-    # OK 버튼은 중앙에서 오른쪽으로
-    btn_ok = plt.Button(plt.axes([center_x + 0.01, btn_y, btn_width, btn_height]), 'OK')
+    btn_all_none = plt.Button(plt.axes([center_x - 1.5*btn_width - 0.01, btn_y, btn_width, btn_height]), 'Select All')
+    btn_toggle = plt.Button(plt.axes([center_x - btn_width/2, btn_y, btn_width, btn_height]), 'Show names')
+    btn_ok = plt.Button(plt.axes([center_x + 0.5*btn_width + 0.01, btn_y, btn_width, btn_height]), 'OK')
     
-    # Toggle button handler
     def toggle_labels(event):
-        show_labels = not keypoint_texts[0].get_visible()  # 현재 상태의 반대
+        show_labels = not keypoint_texts[0].get_visible()
         for text, name in zip(keypoint_texts, keypoints_names):
             text.set_visible(show_labels)
-            # Update text weight based on selection status
             text.set_fontweight('bold' if name in selected_keypoints else 'normal')
         btn_toggle.label.set_text('Hide names' if show_labels else 'Show names')
         plt.draw()
@@ -475,33 +459,49 @@ def select_keypoints(keypoints_names):
     btn_toggle.on_clicked(toggle_labels)
     btn_ok.on_clicked(lambda event: handle_ok_button())
     
-    # Handle keypoint selection
+    def select_all_none(event):
+        if selected_keypoints:
+            selected_keypoints.clear()
+            scatter.set_facecolors(['silver'] * len(keypoints_names))
+            for text in keypoint_texts:
+                text.set_fontweight('normal')
+            selected_text.set_text('Selected: None\nClick on keypoints to select them')
+            btn_all_none.label.set_text('Select All')
+        else:
+            selected_keypoints.extend(keypoints_names)
+            scatter.set_facecolors(['yellow'] * len(keypoints_names))
+            for text in keypoint_texts:
+                text.set_fontweight('bold')
+            selected_text.set_text(f'Selected: {len(keypoints_names)} keypoints')
+            btn_all_none.label.set_text('Select None')
+        plt.draw()
+    
+    btn_all_none.on_clicked(select_all_none)
+    
+    for btn in [btn_all_none, btn_toggle, btn_ok]:
+        btn.color = '#E0E0E0'
+        btn.hovercolor = '#FFFFFF'
+    
     def on_pick(event):
         ind = event.ind[0]
         keypoint = keypoints_names[ind]
         
         if keypoint in selected_keypoints:
             selected_keypoints.remove(keypoint)
-            scatter.set_facecolors(['yellow' if n in selected_keypoints else 'silver' for n in keypoints_names])
-            # Update text weight to normal
             keypoint_texts[ind].set_fontweight('normal')
         else:
             selected_keypoints.append(keypoint)
-            scatter.set_facecolors(['yellow' if n in selected_keypoints else 'silver' for n in keypoints_names])
-            # Update text weight to bold
             keypoint_texts[ind].set_fontweight('bold')
         
+        scatter.set_facecolors(['yellow' if n in selected_keypoints else 'silver' for n in keypoints_names])
+        
         if selected_keypoints:
-            # Create text with bold selected keypoints
-            text_parts = []
-            text_parts.append('Selected: ')
-            for i, kp in enumerate(selected_keypoints):
-                if i > 0:
-                    text_parts.append(', ')
-                text_parts.append(f'$\\bf{{{kp}}}$')  # Use LaTeX bold formatting
+            text_parts = ['Selected: '] + [f'$\\bf{{{kp}}}$' if i == 0 else f', $\\bf{{{kp}}}$' for i, kp in enumerate(selected_keypoints)]
             selected_text.set_text(''.join(text_parts))
+            btn_all_none.label.set_text('Select None')
         else:
             selected_text.set_text('Selected: None\nClick on keypoints to select them')
+            btn_all_none.label.set_text('Select All')
         
         plt.draw()
     
@@ -516,24 +516,45 @@ def init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_aro
     '''
     Step 2: Initialize UI for person and frame selection only (no keypoint selection)
     '''
+    # Define UI parameters
+    UI_PARAMS = {
+        'colors': {
+            'background': 'black',
+            'text': 'white',
+            'control': '#303030',
+            'control_hover': '#404040',
+            'slider': 'lightblue',
+            'slider_edge': (1, 1, 1, 0.5)
+        },
+        'sizes': {
+            'label': 10,
+            'text': 10,
+            'button': 10
+        },
+        'layout': {
+            'total_width': 0.6,
+            'textbox_width': 0.09,
+            'btn_width': 0.04,
+            'btn_spacing': 0.01,
+            'control_height': 0.04,
+            'y_position': 0.08
+        }
+    }
+
+    # Set up the figure and main axes
     frame_height, _ = frame_rgb.shape[:2]
-    fig_height = frame_height/250
+    fig_height = frame_height / 250
     fig = plt.figure(figsize=(8, fig_height))
-    fig.patch.set_facecolor('black')
-    
-    # Main video display
+    fig.patch.set_facecolor(UI_PARAMS['colors']['background'])
+
     ax_video = plt.axes([0.1, 0.2, 0.8, 0.7])
     ax_video.imshow(frame_rgb)
-    ax_video.set_title(f'Camera name: {cam_name}\nSelect person ID and approximate frame', fontsize=12, pad=10, color='white')
     ax_video.axis('off')
-    ax_video.set_facecolor('black')
-    
-    # Add frame slider
-    ax_slider = plt.axes([ax_video.get_position().x0,  
-                         0.15,
-                         ax_video.get_position().width,
-                         0.04])
-    ax_slider.set_facecolor('black')
+    ax_video.set_facecolor(UI_PARAMS['colors']['background'])
+
+    # Create frame slider
+    ax_slider = plt.axes([ax_video.get_position().x0, 0.15, ax_video.get_position().width, 0.04])
+    ax_slider.set_facecolor(UI_PARAMS['colors']['background'])
     frame_slider = Slider(
         ax=ax_slider,
         label='',
@@ -544,113 +565,96 @@ def init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_aro
         valfmt=None 
     )
 
-    # Customize slider appearance
-    frame_slider.poly.set_edgecolor((1, 1, 1, 0.5))  # white edge with transparency
-    frame_slider.poly.set_facecolor('lightblue')
+    frame_slider.poly.set_edgecolor(UI_PARAMS['colors']['slider_edge'])
+    frame_slider.poly.set_facecolor(UI_PARAMS['colors']['slider'])
     frame_slider.poly.set_linewidth(1)
     frame_slider.valtext.set_visible(False)
-    
-    # Initialize controls with improved layout
+
+    # Initialize controls dictionary
     controls = {}
     
-    # Calculate positions for centered controls
-    total_width = 0.6  # Total width for all controls
-    center_x = 0.5  # Center of the figure
-    start_x = center_x - (total_width / 2)  # Starting x position for controls
-    
-    # Control dimensions
-    textbox_width = 0.09
-    btn_width = 0.04
-    btn_spacing = 0.01
-    control_height = 0.04
-    y_position = 0.08
-    
-    # Person number textbox
-    person_ax = plt.axes([start_x + 0.08 , y_position, textbox_width, control_height])
-    person_ax.set_facecolor('#303030')  # 어두운 회색
-    controls['person_textbox'] = TextBox(
-        person_ax, 
-        'Person number', 
-        initial='0',
-        color='#303030',
-        hovercolor='#404040',
-        label_pad=0.1
+    # Calculate positions for UI elements
+    center_x = 0.5
+    start_x = center_x - (UI_PARAMS['layout']['total_width'] / 2)
+
+    # Create person textbox
+    controls['person_textbox'] = create_textbox(
+        [start_x + 0.18, UI_PARAMS['layout']['y_position'], UI_PARAMS['layout']['textbox_width'], UI_PARAMS['layout']['control_height']],
+        f"{cam_name}: Synchronize on person number",
+        '0',
+        UI_PARAMS
     )
-    controls['person_textbox'].label.set_color('white')
-    controls['person_textbox'].text_disp.set_color('white')
-    
-    # Frame number textbox
-    frame_ax = plt.axes([start_x + textbox_width + 0.25 + btn_spacing, y_position, textbox_width, control_height])
-    frame_ax.set_facecolor('#303030')  # 어두운 회색
-    controls['frame_textbox'] = TextBox(
-        frame_ax, 
-        'Approximate frame', 
-        initial=str(frame_number),
-        color='#303030',
-        hovercolor='#404040',
-        label_pad=0.1
+
+    # Create frame textbox
+    controls['frame_textbox'] = create_textbox(
+        [start_x + UI_PARAMS['layout']['textbox_width'] + 0.35 + UI_PARAMS['layout']['btn_spacing'], UI_PARAMS['layout']['y_position'], UI_PARAMS['layout']['textbox_width'], UI_PARAMS['layout']['control_height']],
+        'around frame',
+        str(frame_number),
+        UI_PARAMS
     )
-    controls['frame_textbox'].label.set_color('white')
-    controls['frame_textbox'].text_disp.set_color('white')
-    
-    # Navigation and OK buttons
-    btn_start_x = start_x + 2 * (textbox_width + btn_spacing)
-    
-    prev_ax = plt.axes([btn_start_x + 0.245, y_position, btn_width, control_height])
-    prev_ax.set_facecolor('#303030')  # 어두운 회색
-    controls['btn_prev'] = plt.Button(
-        prev_ax, 
-        '<',
-        color='#303030',
-        hovercolor='#404040'
-    )
-    controls['btn_prev'].label.set_color('white')
-    
-    next_ax = plt.axes([btn_start_x + btn_width + btn_spacing + 0.24, y_position, btn_width, control_height])
-    next_ax.set_facecolor('#303030')  # 어두운 회색
-    controls['btn_next'] = plt.Button(
-        next_ax, 
-        '>',
-        color='#303030',
-        hovercolor='#404040'
-    )
-    controls['btn_next'].label.set_color('white')
-    
-    # OK button with increased size
-    ok_ax = plt.axes([btn_start_x + 2 * (btn_width + btn_spacing) + 0.24, y_position, btn_width * 1.5, control_height])
-    ok_ax.set_facecolor('#303030')  # 어두운 회색
+
+    # Add frame text
+    frame_text_ax = plt.axes([controls['frame_textbox'].ax.get_position().x1 + 0.01, UI_PARAMS['layout']['y_position'], 0.15, UI_PARAMS['layout']['control_height']])
+    frame_text_ax.text(0, 0.5, f'± ', color=UI_PARAMS['colors']['text'], fontsize=UI_PARAMS['sizes']['text'], va='center')
+    frame_text_ax.axis('off')
+
+    # Create OK button
+    ok_ax = plt.axes([start_x + 2 * (UI_PARAMS['layout']['textbox_width'] + UI_PARAMS['layout']['btn_spacing']) + 0.35, UI_PARAMS['layout']['y_position'], UI_PARAMS['layout']['btn_width'] * 1.5, UI_PARAMS['layout']['control_height']])
+    ok_ax.set_facecolor(UI_PARAMS['colors']['control'])
     controls['btn_ok'] = plt.Button(
         ok_ax, 
         'OK',
-        color='#303030',
-        hovercolor='#404040'
+        color=UI_PARAMS['colors']['control'],
+        hovercolor=UI_PARAMS['colors']['control_hover']
     )
-    controls['btn_ok'].label.set_color('white')
-    
-    # Initialize containers
+    controls['btn_ok'].label.set_color(UI_PARAMS['colors']['text'])
+    controls['btn_ok'].label.set_fontsize(UI_PARAMS['sizes']['button'])
+
+    # Initialize containers for dynamic elements
     containers = {
         'rects': [],
         'annotations': [],
         'bounding_boxes_list': [],
-        'selected_idx': [0]  # Add selected_idx container
+        'selected_idx': [0]
     }
-    
-    # Add slider to controls
+
     controls['frame_slider'] = frame_slider
 
-    # Connect hover event with selected_idx_container
+    # Connect hover event
     fig.canvas.mpl_connect('motion_notify_event', 
         lambda event: on_hover(event, fig, containers['rects'], 
                              containers['annotations'], 
                              containers['bounding_boxes_list'],
                              containers['selected_idx']))
 
+    # Return UI components
     return {
         'fig': fig,
         'ax_video': ax_video,
         'controls': controls,
         'containers': containers
     }
+
+def create_textbox(ax_pos, label, initial, UI_PARAMS):
+    '''
+    Helper function to create a textbox with consistent styling
+    '''
+    ax = plt.axes(ax_pos)
+    ax.set_facecolor(UI_PARAMS['colors']['control'])
+    textbox = TextBox(
+        ax, 
+        label,
+        initial=initial,
+        color=UI_PARAMS['colors']['control'],
+        hovercolor=UI_PARAMS['colors']['control_hover'],
+        label_pad=0.1
+    )
+    textbox.label.set_color(UI_PARAMS['colors']['text'])
+    textbox.label.set_fontsize(UI_PARAMS['sizes']['label'])
+    textbox.text_disp.set_color(UI_PARAMS['colors']['text'])
+    textbox.text_disp.set_fontsize(UI_PARAMS['sizes']['text'])
+
+    return textbox
 
 
 def select_person(vid_or_img_files, cam_names, json_files_names_range, search_around_frames, pose_dir, json_dirs_names, keypoints_names):
@@ -660,11 +664,11 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
     '''
     logging.info('Manual mode: selecting keypoints and then person/frame for each camera.')
     
-    # Step 1: Select keypoints first (only once)
+    # Step 1
     selected_keypoints = select_keypoints(keypoints_names)
     logging.info(f'Selected keypoints for all cameras: {selected_keypoints}')
     
-    # Step 2: Select person and frame for each camera
+    # Step 2
     selected_id_list = []
     approx_time_maxspeed = []
     keypoints_to_consider = []
@@ -675,7 +679,6 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
         video_files_dict = {cam_name: files for cam_name in cam_names for files in vid_or_img_files if cam_name in os.path.basename(files[0])}
 
     for i, cam_name in enumerate(cam_names):
-        # Initialize containers for this camera
         selected_idx_container = [0]
         
         vid_or_img_files_cam = video_files_dict.get(cam_name)
@@ -746,17 +749,8 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
         ui['controls']['person_textbox'].on_submit(
             lambda text: handle_person_change(text, ui['containers']['selected_idx'], ui['controls']['person_textbox']))
 
-        # Navigation and OK buttons
-        btn_prev = ui['controls']['btn_prev']
-        btn_next = ui['controls']['btn_next']
+        # OK button
         btn_ok = ui['controls']['btn_ok']
-        
-        btn_prev.on_clicked(lambda event: handle_prev_frame(ui['controls']['frame_textbox'], search_around_frames, i, cap, ui['ax_video'],
-                           frame_to_json, pose_dir, json_dirs_names[i], ui['containers']['rects'], ui['containers']['annotations'],
-                           bounding_boxes_list, ui['fig']))
-        btn_next.on_clicked(lambda event: handle_next_frame(ui['controls']['frame_textbox'], search_around_frames, i, cap, ui['ax_video'],
-                           frame_to_json, pose_dir, json_dirs_names[i], ui['containers']['rects'], ui['containers']['annotations'],
-                           bounding_boxes_list, ui['fig']))
         btn_ok.on_clicked(lambda event: handle_ok_button())
 
         # Keyboard navigation
@@ -776,6 +770,55 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
         logging.info(f'--> Camera #{i}: selected person #{selected_idx_container[0]} at frame #{ui["controls"]["frame_textbox"].text}')
 
     return selected_id_list, keypoints_to_consider, approx_time_maxspeed
+
+
+# SYNC FUNCTIONS
+def load_frame_and_bounding_boxes(cap, frame_number, frame_to_json, pose_dir, json_dir_name):
+    '''
+    Given a video capture object or a list of image files and a frame number, 
+    load the frame (or image) and corresponding bounding boxes.
+
+    INPUTS:
+    - cap: cv2.VideoCapture object or list of image file paths.
+    - frame_number: int. The frame number to load.
+    - frame_to_json: dict. Mapping from frame numbers to JSON file names.
+    - pose_dir: str. Path to the directory containing pose data.
+    - json_dir_name: str. Name of the JSON directory for the current camera.
+
+    OUTPUTS:
+    - frame_rgb: The RGB image of the frame or image.
+    - bounding_boxes_list: List of bounding boxes for the frame/image.
+    '''
+
+    # Case 1: If input is a video file (cv2.VideoCapture object)
+    if isinstance(cap, cv2.VideoCapture):
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+        ret, frame = cap.read()
+        if not ret:
+            return None, []
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+    # Case 2: If input is a list of image file paths
+    elif isinstance(cap, list):
+        if frame_number >= len(cap):
+            return None, []
+        image_path = cap[frame_number]
+        frame = cv2.imread(image_path)
+        if frame is None:
+            return None, []
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    
+    else:
+        raise ValueError("Input must be either a video capture object or a list of image file paths.")
+
+    # Get the corresponding JSON file for bounding boxes
+    json_file_name = frame_to_json.get(frame_number)
+    bounding_boxes_list = []
+    if json_file_name:
+        json_file_path = os.path.join(pose_dir, json_dir_name, json_file_name)
+        bounding_boxes_list.extend(bounding_boxes(json_file_path))
+
+    return frame_rgb, bounding_boxes_list
 
 
 def convert_json2pandas(json_files, likelihood_threshold=0.6, keypoints_ids=[], multi_person=False, selected_id=None):
@@ -988,7 +1031,7 @@ def synchronize_cams_all(config_dict):
     keypoints_to_consider = config_dict.get('synchronization').get('keypoints_to_consider')
     approx_time_maxspeed = config_dict.get('synchronization').get('approx_time_maxspeed') 
     time_range_around_maxspeed = config_dict.get('synchronization').get('time_range_around_maxspeed')
-    manual_selection = config_dict.get('synchronization').get('manual_person_selection')
+    synchronization_gui = config_dict.get('synchronization').get('synchronization_gui')
 
     likelihood_threshold = config_dict.get('synchronization').get('likelihood_threshold')
     filter_cutoff = int(config_dict.get('synchronization').get('filter_cutoff'))
@@ -1089,7 +1132,7 @@ def synchronize_cams_all(config_dict):
         raise ValueError(f'No json files found within the specified frame range ({frame_range}) at the times {approx_time_maxspeed} +/- {time_range_around_maxspeed} s.')
     
     # Handle manual selection if multi person is True
-    if manual_selection:
+    if synchronization_gui:
         selected_id_list, keypoints_to_consider, approx_time_maxspeed = select_person(
             vid_or_img_files, cam_names, json_files_names_range, search_around_frames, 
             pose_dir, json_dirs_names, keypoints_names)
@@ -1159,105 +1202,3 @@ def synchronize_cams_all(config_dict):
                 shutil.copy(os.path.join(pose_dir, os.path.basename(j_dir), j_file), os.path.join(sync_dir, os.path.basename(j_dir), json_offset_name))
 
     logging.info(f'Synchronized json files saved in {sync_dir}.')
-
-
-def handle_person_change(text, selected_idx_container, person_textbox):
-    '''
-    Handle changes to the person selection text box.
-    
-    INPUTS:
-    - text: str. The text entered in the person selection box.
-    - selected_idx_container: list. Container for the selected person index.
-    - person_textbox: TextBox. The person selection text box widget.
-    '''
-    try:
-        selected_idx_container[0] = int(text)
-    except ValueError:
-        person_textbox.set_val('0')
-        selected_idx_container[0] = 0
-
-
-def handle_keypoints_change(text, keypoints_to_consider_container):
-    '''
-    Handle changes to the keypoints selection text box.
-    
-    INPUTS:
-    - text: str. The text entered in the keypoints selection box.
-    - keypoints_to_consider_container: list. Container for the selected keypoints.
-    '''
-    keypoints_to_consider_container[0] = text.split(',')
-
-
-def handle_frame_change(text, frame_number, frame_textbox, cap, ax_video, frame_to_json, 
-                       pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, 
-                       fig, search_around_frames, i):
-    '''
-    Handle changes to the frame number text box.
-    
-    INPUTS:
-    - text: str. The text entered in the frame number box.
-    - frame_number: int. The current frame number.
-    - frame_textbox: TextBox. The frame number text box widget.
-    - Other parameters: Same as in update_play function.
-    '''
-    try:
-        frame_num = int(text)
-        if search_around_frames[i][0] <= frame_num <= search_around_frames[i][1]:
-            update_play(cap, ax_video.images[0], frame_num, frame_to_json, 
-                       pose_dir, json_dir_name, rects, annotations, 
-                       bounding_boxes_list, ax_video, fig)
-    except ValueError:
-        frame_textbox.set_val(str(frame_number))
-
-
-def handle_prev_frame(frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
-                     pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig):
-    '''
-    Handle previous frame button click.
-    
-    INPUTS:
-    - frame_textbox: TextBox. The frame number text box widget.
-    - Other parameters: Same as in update_play function.
-    '''
-    current = int(frame_textbox.text)
-    if current > search_around_frames[i][0]:
-        new_frame = str(current - 1)
-        frame_textbox.set_val(new_frame)
-        handle_frame_change(new_frame, current, frame_textbox, cap, ax_video, frame_to_json,
-                          pose_dir, json_dir_name, rects, annotations, bounding_boxes_list,
-                          fig, search_around_frames, i)
-
-
-def handle_next_frame(frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
-                     pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig):
-    '''
-    Handle next frame button click.
-    
-    INPUTS:
-    - frame_textbox: TextBox. The frame number text box widget.
-    - Other parameters: Same as in update_play function.
-    '''
-    current = int(frame_textbox.text)
-    if current < search_around_frames[i][1]:
-        new_frame = str(current + 1)
-        frame_textbox.set_val(new_frame)
-        handle_frame_change(new_frame, current, frame_textbox, cap, ax_video, frame_to_json,
-                          pose_dir, json_dir_name, rects, annotations, bounding_boxes_list,
-                          fig, search_around_frames, i)
-
-
-def handle_key_press(event, frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
-                    pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig):
-    '''
-    Handle keyboard navigation events.
-    
-    INPUTS:
-    - event: Event. The keyboard event.
-    - Other parameters: Same as in update_play function.
-    '''
-    if event.key == 'left':
-        handle_prev_frame(frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
-                         pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig)
-    elif event.key == 'right':
-        handle_next_frame(frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
-                         pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig)
