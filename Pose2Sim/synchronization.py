@@ -16,7 +16,7 @@
     or a list of them, or the right or left side.
     All frames can be considered, or only those around a specific time (typically, 
     the time when there is a single participant in the scene performing a clear vertical motion).
-    Has also been successfully tested for synchronizing random walkswith random walks.
+    Has also been successfully tested for synchronizing random walks with random walks.
 
     Keypoints whose likelihood is too low are filtered out; and the remaining ones are 
     filtered with a butterworth filter.
@@ -50,9 +50,6 @@ from anytree.importer import DictImporter
 from matplotlib.widgets import TextBox, Button
 import logging
 
-# Global matplotlib settings - remove toolbar
-plt.rcParams['toolbar'] = 'none'
-
 from Pose2Sim.common import sort_stringlist_by_last_number, bounding_boxes
 from Pose2Sim.skeletons import *
 
@@ -69,16 +66,13 @@ __status__ = "Development"
 
 
 # UI FUNCTIONS
+
+# Global matplotlib settings - remove toolbar
+plt.rcParams['toolbar'] = 'none'
+
 def reset_styles(rect, annotation):
     '''
     Resets the styles of a rectangle and its annotation to default.
-
-    INPUTS:
-    - rect: Rectangle patch representing a bounding box.
-    - annotation: Text annotation for the bounding box.
-
-    OUTPUTS:
-    - None. Modifies rect and annotation in place.
     '''
 
     rect.set_linewidth(1)
@@ -86,6 +80,29 @@ def reset_styles(rect, annotation):
     rect.set_facecolor((1, 1, 1, 0.1))
     annotation.set_fontsize(7)
     annotation.set_fontweight('normal')
+
+
+def create_textbox(ax_pos, label, initial, UI_PARAMS):
+    '''
+    Helper function to create a textbox with consistent styling
+    '''
+    ax = plt.axes(ax_pos)
+    ax.set_facecolor(UI_PARAMS['colors']['control'])
+    textbox = TextBox(
+        ax, 
+        label,
+        initial=initial,
+        color=UI_PARAMS['colors']['control'],
+        hovercolor=UI_PARAMS['colors']['control_hover'],
+        label_pad=0.1
+    )
+    textbox.label.set_color(UI_PARAMS['colors']['text'])
+    textbox.label.set_fontsize(UI_PARAMS['sizes']['label'])
+    textbox.text_disp.set_color(UI_PARAMS['colors']['text'])
+    textbox.text_disp.set_fontsize(UI_PARAMS['sizes']['text'])
+
+    return textbox
+
 
 ## Handlers
 def handle_ok_button():
@@ -107,60 +124,68 @@ def handle_person_change(text, selected_idx_container, person_textbox):
 
 
 def handle_frame_change(text, frame_number, frame_textbox, cap, ax_video, frame_to_json, 
-                       pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, 
-                       fig, search_around_frames, i):
+                        pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, 
+                        fig, search_around_frames, i, time_range_around_maxspeed, fps, ui):
     '''
     Handle changes to the frame number text box.
     '''
-    try:
-        frame_num = int(text)
-        if search_around_frames[i][0] <= frame_num <= search_around_frames[i][1]:
-            update_play(cap, ax_video.images[0], frame_num, frame_to_json, 
-                       pose_dir, json_dir_name, rects, annotations, 
-                       bounding_boxes_list, ax_video, fig)
-    except ValueError:
-        frame_textbox.set_val(str(frame_number))
+    if search_around_frames[i][0] <= frame_number <= search_around_frames[i][1]:
+        # Update video frame first
+        update_play(cap, ax_video.images[0], frame_number, frame_to_json, 
+                    pose_dir, json_dir_name, rects, annotations, 
+                    bounding_boxes_list, ax_video, fig)
+        
+        # Update UI elements
+        frame_textbox.eventson = False
+        new_time = frame_number / fps
+        frame_textbox.set_val(f"{new_time:.2f} ±{time_range_around_maxspeed}")
+        frame_textbox.eventson = True
+        
+        # Update slider and highlight using ui
+        ui['controls']['frame_slider'].set_val(frame_number)
+        range_start = max(frame_number - time_range_around_maxspeed * fps, search_around_frames[i][0])
+        range_end = min(frame_number + time_range_around_maxspeed * fps, search_around_frames[i][1])
+        vertices = np.array([[range_start, 0.20], [range_start, 0.80], 
+                             [range_end, 0.80], [range_end, 0.20], [range_start, 0.20]])
+        ui['controls']['range_highlight'].xy = vertices
+        fig.canvas.draw_idle()
 
 
 def handle_prev_frame(frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
-                     pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig):
-    '''
-    Handle previous frame button click.
-    '''
-    current = int(frame_textbox.text)
+                      pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig,
+                      time_range_around_maxspeed, fps, ui):
+    time_val = float(frame_textbox.text.split(' ±')[0])
+    current = round(time_val * fps)
     if current > search_around_frames[i][0]:
-        new_frame = str(current - 1)
-        frame_textbox.set_val(new_frame)
-        handle_frame_change(new_frame, current, frame_textbox, cap, ax_video, frame_to_json,
-                          pose_dir, json_dir_name, rects, annotations, bounding_boxes_list,
-                          fig, search_around_frames, i)
+        prev_frame = current - 1
+        handle_frame_change(None, prev_frame, frame_textbox, cap, ax_video, frame_to_json,
+                            pose_dir, json_dir_name, rects, annotations, bounding_boxes_list,
+                            fig, search_around_frames, i, time_range_around_maxspeed, fps, ui)
 
 
 def handle_next_frame(frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
-                     pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig):
-    '''
-    Handle next frame button click.
-    '''
-    current = int(frame_textbox.text)
+                      pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig,
+                      time_range_around_maxspeed, fps, ui):
+    time_val = float(frame_textbox.text.split(' ±')[0])
+    current = round(time_val * fps)
     if current < search_around_frames[i][1]:
-        new_frame = str(current + 1)
-        frame_textbox.set_val(new_frame)
-        handle_frame_change(new_frame, current, frame_textbox, cap, ax_video, frame_to_json,
-                          pose_dir, json_dir_name, rects, annotations, bounding_boxes_list,
-                          fig, search_around_frames, i)
+        next_frame = current + 1
+        handle_frame_change(None, next_frame, frame_textbox, cap, ax_video, frame_to_json,
+                            pose_dir, json_dir_name, rects, annotations, bounding_boxes_list,
+                            fig, search_around_frames, i, time_range_around_maxspeed, fps, ui)
 
 
 def handle_key_press(event, frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
-                    pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig):
-    '''
-    Handle keyboard navigation events.
-    '''
+                     pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig,
+                     time_range_around_maxspeed, fps, ui):
     if event.key == 'left':
         handle_prev_frame(frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
-                         pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig)
+                          pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig,
+                          time_range_around_maxspeed, fps, ui)
     elif event.key == 'right':
         handle_next_frame(frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
-                         pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig)
+                          pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig,
+                          time_range_around_maxspeed, fps, ui)
 
 
 def handle_toggle_labels(event, keypoint_texts, containers, btn_toggle):
@@ -362,19 +387,39 @@ def update_play(cap, image, frame_number, frame_to_json, pose_dir, json_dir_name
     - None. Updates the plot with the new frame, bounding boxes, and annotations.
     '''
 
+    # Store the currently selected box index if any
+    selected_idx = None
+    for idx, rect in enumerate(rects):
+        if rect.get_linewidth() > 1:  # If box is highlighted
+            selected_idx = idx
+            break
+
     frame_rgb, bounding_boxes_list_new = load_frame_and_bounding_boxes(cap, frame_number, frame_to_json, pose_dir, json_dir_name)
     if frame_rgb is None:
         return
 
-    # Update frame image
-    image.set_data(frame_rgb)
-
-    # Update bounding boxes
+    # Update image
+    image.set_array(frame_rgb)
+    
+    # Clear existing boxes and annotations
+    for rect in rects:
+        rect.remove()
+    for ann in annotations:
+        ann.remove()
+    rects.clear()
+    annotations.clear()
+    
+    # Update bounding boxes list
     bounding_boxes_list.clear()
     bounding_boxes_list.extend(bounding_boxes_list_new)
-
-    # Draw bounding boxes and annotations
+    
+    # Draw new boxes and annotations
     draw_bounding_boxes_and_annotations(ax, bounding_boxes_list, rects, annotations)
+    
+    # Restore highlight on the selected box if it still exists
+    if selected_idx is not None and selected_idx < len(rects):
+        highlight_selected_box(rects[selected_idx], annotations[selected_idx])
+    
     fig.canvas.draw_idle()
 
 
@@ -512,7 +557,7 @@ def select_keypoints(keypoints_names):
     return selected_keypoints
 
 
-def init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_around_frames, cam_index):
+def init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_around_frames, time_range_around_maxspeed, fps, cam_index):
     '''
     Step 2: Initialize UI for person and frame selection only (no keypoint selection)
     '''
@@ -528,7 +573,7 @@ def init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_aro
         },
         'sizes': {
             'label': 10,
-            'text': 10,
+            'text': 9.5,
             'button': 10
         },
         'layout': {
@@ -542,18 +587,31 @@ def init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_aro
     }
 
     # Set up the figure and main axes
-    frame_height, _ = frame_rgb.shape[:2]
-    fig_height = frame_height / 250
+    frame_height, frame_width = frame_rgb.shape[:2]
+    is_vertical = frame_height > frame_width
+    
+    # Calculate appropriate figure height based on video orientation
+    if is_vertical:
+        fig_height = frame_height / 250 # for vertical videos
+    else:
+        # For horizontal videos
+        fig_height = max(frame_height / 300, 6)
+    
     fig = plt.figure(figsize=(8, fig_height))
     fig.patch.set_facecolor(UI_PARAMS['colors']['background'])
 
-    ax_video = plt.axes([0.1, 0.2, 0.8, 0.7])
+    # Adjust UI layout based on video orientation
+    video_axes_height = 0.7 if is_vertical else 0.6  # Give more space for controls in horizontal videos
+    slider_y = 0.15 if is_vertical else 0.2  # Move slider down a bit for horizontal videos
+    controls_y = UI_PARAMS['layout']['y_position'] if is_vertical else 0.1  # Move controls up for horizontal videos
+    
+    ax_video = plt.axes([0.1, 0.2, 0.8, video_axes_height])
     ax_video.imshow(frame_rgb)
     ax_video.axis('off')
     ax_video.set_facecolor(UI_PARAMS['colors']['background'])
 
     # Create frame slider
-    ax_slider = plt.axes([ax_video.get_position().x0, 0.15, ax_video.get_position().width, 0.04])
+    ax_slider = plt.axes([ax_video.get_position().x0, slider_y, ax_video.get_position().width, 0.04])
     ax_slider.set_facecolor(UI_PARAMS['colors']['background'])
     frame_slider = Slider(
         ax=ax_slider,
@@ -570,8 +628,18 @@ def init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_aro
     frame_slider.poly.set_linewidth(1)
     frame_slider.valtext.set_visible(False)
 
+    # Add yellow highlight for time range around maxspeed
+    range_start = max(frame_number - time_range_around_maxspeed*fps, search_around_frames[cam_index][0])
+    range_end = min(frame_number + time_range_around_maxspeed*fps, search_around_frames[cam_index][1])
+    highlight = ax_slider.axvspan(range_start, range_end, 
+                                ymin=0.20, ymax=0.80,  # Match the height with vertices in the update_frame function
+                                color='yellow', alpha=0.5)
+
+    # Store highlight for later updates
+    controls = {'range_highlight': highlight}
+    
     # Initialize controls dictionary
-    controls = {}
+    controls['frame_slider'] = frame_slider
     
     # Calculate positions for UI elements
     center_x = 0.5
@@ -579,7 +647,7 @@ def init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_aro
 
     # Create person textbox
     controls['person_textbox'] = create_textbox(
-        [start_x + 0.18, UI_PARAMS['layout']['y_position'], UI_PARAMS['layout']['textbox_width'], UI_PARAMS['layout']['control_height']],
+        [start_x + 0.27, controls_y, UI_PARAMS['layout']['textbox_width'], UI_PARAMS['layout']['control_height']],
         f"{cam_name}: Synchronize on person number",
         '0',
         UI_PARAMS
@@ -587,19 +655,14 @@ def init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_aro
 
     # Create frame textbox
     controls['frame_textbox'] = create_textbox(
-        [start_x + UI_PARAMS['layout']['textbox_width'] + 0.35 + UI_PARAMS['layout']['btn_spacing'], UI_PARAMS['layout']['y_position'], UI_PARAMS['layout']['textbox_width'], UI_PARAMS['layout']['control_height']],
-        'around frame',
-        str(frame_number),
+        [start_x + UI_PARAMS['layout']['textbox_width'] + 0.39 + UI_PARAMS['layout']['btn_spacing'], controls_y, UI_PARAMS['layout']['textbox_width'], UI_PARAMS['layout']['control_height']],
+        'around time',
+        f"{frame_number/fps:.2f} ±{time_range_around_maxspeed}",
         UI_PARAMS
     )
-
-    # Add frame text
-    frame_text_ax = plt.axes([controls['frame_textbox'].ax.get_position().x1 + 0.01, UI_PARAMS['layout']['y_position'], 0.15, UI_PARAMS['layout']['control_height']])
-    frame_text_ax.text(0, 0.5, f'± ', color=UI_PARAMS['colors']['text'], fontsize=UI_PARAMS['sizes']['text'], va='center')
-    frame_text_ax.axis('off')
-
+    
     # Create OK button
-    ok_ax = plt.axes([start_x + 2 * (UI_PARAMS['layout']['textbox_width'] + UI_PARAMS['layout']['btn_spacing']) + 0.35, UI_PARAMS['layout']['y_position'], UI_PARAMS['layout']['btn_width'] * 1.5, UI_PARAMS['layout']['control_height']])
+    ok_ax = plt.axes([start_x + 2 * (UI_PARAMS['layout']['textbox_width'] + UI_PARAMS['layout']['btn_spacing']) + 0.38, controls_y, UI_PARAMS['layout']['btn_width'] * 1.5, UI_PARAMS['layout']['control_height']])
     ok_ax.set_facecolor(UI_PARAMS['colors']['control'])
     controls['btn_ok'] = plt.Button(
         ok_ax, 
@@ -618,8 +681,6 @@ def init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_aro
         'selected_idx': [0]
     }
 
-    controls['frame_slider'] = frame_slider
-
     # Connect hover event
     fig.canvas.mpl_connect('motion_notify_event', 
         lambda event: on_hover(event, fig, containers['rects'], 
@@ -635,29 +696,8 @@ def init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_aro
         'containers': containers
     }
 
-def create_textbox(ax_pos, label, initial, UI_PARAMS):
-    '''
-    Helper function to create a textbox with consistent styling
-    '''
-    ax = plt.axes(ax_pos)
-    ax.set_facecolor(UI_PARAMS['colors']['control'])
-    textbox = TextBox(
-        ax, 
-        label,
-        initial=initial,
-        color=UI_PARAMS['colors']['control'],
-        hovercolor=UI_PARAMS['colors']['control_hover'],
-        label_pad=0.1
-    )
-    textbox.label.set_color(UI_PARAMS['colors']['text'])
-    textbox.label.set_fontsize(UI_PARAMS['sizes']['label'])
-    textbox.text_disp.set_color(UI_PARAMS['colors']['text'])
-    textbox.text_disp.set_fontsize(UI_PARAMS['sizes']['text'])
 
-    return textbox
-
-
-def select_person(vid_or_img_files, cam_names, json_files_names_range, search_around_frames, pose_dir, json_dirs_names, keypoints_names):
+def select_person(vid_or_img_files, cam_names, json_files_names_range, search_around_frames, pose_dir, json_dirs_names, keypoints_names, time_range_around_maxspeed, fps):
     '''
     Step 1: Select keypoints to consider for all cameras
     Step 2: Select person ID and frame for each camera
@@ -671,7 +711,7 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
     # Step 2
     selected_id_list = []
     approx_time_maxspeed = []
-    keypoints_to_consider = []
+    keypoints_to_consider = selected_keypoints  # Changed: directly use selected_keypoints instead of creating a list
     
     try: # video files
         video_files_dict = {cam_name: file for cam_name in cam_names for file in vid_or_img_files if cam_name in os.path.basename(file)}
@@ -706,7 +746,7 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
             continue
         
         # Initialize UI for person/frame selection only (no keypoint selection)
-        ui = init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_around_frames, i)
+        ui = init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_around_frames, time_range_around_maxspeed, fps, i)
         
         # Draw initial bounding boxes
         draw_bounding_boxes_and_annotations(ui['ax_video'], bounding_boxes_list, 
@@ -717,22 +757,48 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
         # Add slider update handler
         def update_frame(val):
             frame_num = int(val)
-            ui['controls']['frame_textbox'].set_val(str(frame_num))
-            handle_frame_change(str(frame_num), frame_number, ui['controls']['frame_textbox'], 
-                              cap, ui['ax_video'], frame_to_json, pose_dir, json_dirs_names[i],
-                              ui['containers']['rects'], ui['containers']['annotations'],
-                              bounding_boxes_list, ui['fig'], search_around_frames, i)
-        
+            ui['controls']['frame_textbox'].eventson = False  # Temporarily disable events
+            new_time = frame_num / fps
+            ui['controls']['frame_textbox'].set_val(f"{new_time:.2f} ±{time_range_around_maxspeed}")
+            ui['controls']['frame_textbox'].eventson = True
+            
+            # Update yellow highlight position
+            range_start = max(frame_num - time_range_around_maxspeed * fps, search_around_frames[i][0])
+            range_end = min(frame_num + time_range_around_maxspeed * fps, search_around_frames[i][1])
+            
+            # Update highlight vertices
+            vertices = np.array([
+                [range_start, 0.20],  # Left bottom
+                [range_start, 0.80],  # Left top
+                [range_end, 0.80],    # Right top
+                [range_end, 0.20],    # Right bottom
+                [range_start, 0.20]   # Back to left bottom (closed polygon)
+            ])
+            ui['controls']['range_highlight'].xy = vertices
+            
+            # Update the video frame and bounding boxes
+            update_play(cap, ui['ax_video'].images[0], frame_num, frame_to_json, 
+                        pose_dir, json_dirs_names[i], ui['containers']['rects'], 
+                        ui['containers']['annotations'], bounding_boxes_list, 
+                        ui['ax_video'], ui['fig'])
+            
+            ui['fig'].canvas.draw_idle()
+            
+        ui['fig'].canvas.mpl_connect('key_press_event', lambda event: handle_key_press(event, ui['controls']['frame_textbox'],
+                                    search_around_frames, i, cap, ui['ax_video'], frame_to_json, pose_dir,
+                                    json_dirs_names[i], ui['containers']['rects'], ui['containers']['annotations'], 
+                                    bounding_boxes_list, ui['fig'], time_range_around_maxspeed, fps, ui))
+                
         ui['controls']['frame_slider'].on_changed(update_frame)
         
         # Update frame textbox to also update slider
         def update_textbox_and_slider(text):
-            handle_frame_change(text, frame_number, ui['controls']['frame_textbox'], cap, ui['ax_video'],
+            handle_frame_change(None, int(float(text.split(' ±')[0]) * fps), ui['controls']['frame_textbox'], cap, ui['ax_video'],
                               frame_to_json, pose_dir, json_dirs_names[i], ui['containers']['rects'],
                               ui['containers']['annotations'], bounding_boxes_list, ui['fig'],
-                              search_around_frames, i)
+                              search_around_frames, i, time_range_around_maxspeed, fps, ui)
             try:
-                frame_num = int(text)
+                frame_num = int(float(text.split(' ±')[0]) * fps)
                 if search_around_frames[i][0] <= frame_num <= search_around_frames[i][1]:
                     ui['controls']['frame_slider'].set_val(frame_num)
             except ValueError:
@@ -756,7 +822,8 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
         # Keyboard navigation
         ui['fig'].canvas.mpl_connect('key_press_event', lambda event: handle_key_press(event, ui['controls']['frame_textbox'],
                               search_around_frames, i, cap, ui['ax_video'], frame_to_json, pose_dir,
-                              json_dirs_names[i], ui['containers']['rects'], ui['containers']['annotations'], bounding_boxes_list, ui['fig']))
+                              json_dirs_names[i], ui['containers']['rects'], ui['containers']['annotations'], bounding_boxes_list, ui['fig'],
+                              time_range_around_maxspeed, fps, ui))
 
         # Show plot and wait for user input
         plt.show()
@@ -764,11 +831,10 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
 
         # Store selected values after OK button is clicked
         selected_id_list.append(selected_idx_container[0])
-        keypoints_to_consider.append(selected_keypoints)  # Use the keypoints selected in Step 1
-        approx_time_maxspeed.append(int(ui['controls']['frame_textbox'].text))
-        
-        logging.info(f'--> Camera #{i}: selected person #{selected_idx_container[0]} at frame #{ui["controls"]["frame_textbox"].text}')
-
+        current_frame = int(float(ui['controls']['frame_textbox'].text.split(' ±')[0]) * fps)
+        approx_time_maxspeed.append(current_frame / fps)
+        logging.info(f'--> Camera #{i}: selected person #{selected_idx_container[0]} at time #{current_frame / fps:.2f}')
+    
     return selected_id_list, keypoints_to_consider, approx_time_maxspeed
 
 
@@ -1131,11 +1197,11 @@ def synchronize_cams_all(config_dict):
     if np.array([j==[] for j in json_files_names_range]).any():
         raise ValueError(f'No json files found within the specified frame range ({frame_range}) at the times {approx_time_maxspeed} +/- {time_range_around_maxspeed} s.')
     
-    # Handle manual selection if multi person is True
+    # Handle manual selection if synchronization_gui is True
     if synchronization_gui:
         selected_id_list, keypoints_to_consider, approx_time_maxspeed = select_person(
             vid_or_img_files, cam_names, json_files_names_range, search_around_frames, 
-            pose_dir, json_dirs_names, keypoints_names)
+            pose_dir, json_dirs_names, keypoints_names, time_range_around_maxspeed, fps)
     else:
         selected_id_list = [None] * cam_nb
 
@@ -1153,14 +1219,13 @@ def synchronize_cams_all(config_dict):
         else:
             raise ValueError('keypoints_to_consider should be "all", "right", "left", or a list of keypoint names.\n\
                             If you specified keypoints, make sure that they exist in your pose_model.')
-        
+
         kpt_indices = np.sort(np.concatenate([np.array(kpt_indices)*2, np.array(kpt_indices)*2+1]))
         df_coords[i] = df_coords[i][kpt_indices]
         df_coords[i] = df_coords[i].apply(interpolate_zeros_nans, axis=0, args = ['linear'])
         df_coords[i] = df_coords[i].bfill().ffill()
         df_coords[i] = pd.DataFrame(signal.filtfilt(b, a, df_coords[i], axis=0))
-
-
+    
     # Compute sum of speeds
     df_speed = []
     sum_speeds = []
