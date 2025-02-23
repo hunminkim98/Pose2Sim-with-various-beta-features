@@ -424,121 +424,93 @@ def update_play(cap, image, frame_number, frame_to_json, pose_dir, json_dir_name
 
 
 def select_keypoints(keypoints_names):
-    '''
-    Step 1: UI for selecting keypoints only
-    '''
-    # Define common text sizes
+    # 텍스트 크기 정의
     TITLE_SIZE = 12
     LABEL_SIZE = 8
     BUTTON_SIZE = 10
     
-    # Create figure for keypoint selection only
+    # figure 생성
     fig = plt.figure(figsize=(6, 8))
     fig.patch.set_facecolor('black')
 
-    # Keypoints selection area
+    # 키포인트 선택 영역
     ax_keypoints = plt.axes([0.1, 0.2, 0.8, 0.7])
     ax_keypoints.set_facecolor('black')
     ax_keypoints.set_title('Select keypoints to synchronize on', fontsize=TITLE_SIZE, pad=10, color='white')
     
-    # Define keypoints positions
-    if 'RBigToe' in keypoints_names and 'LBigToe' in keypoints_names:  # with feet
-        keypoints_positions = {
-            'Head': (0.50, 0.85), 'Neck': (0.50, 0.75), 'Nose': (0.50, 0.80),
-            'Hip': (0.50, 0.42), 'RHip': (0.42, 0.42), 'LHip': (0.58, 0.42), 
-            'RShoulder': (0.40, 0.75), 'RElbow': (0.35, 0.65), 'RWrist': (0.25, 0.50), 
-            'RKnee': (0.40, 0.25), 'RAnkle': (0.40, 0.05), 
-            'RSmallToe': (0.35, 0.0), 'RBigToe': (0.42, 0.0), 'RHeel': (0.40, 0.02), 
-            'LShoulder': (0.60, 0.75), 'LElbow': (0.65, 0.65), 'LWrist': (0.75, 0.50),
-            'LKnee': (0.60, 0.25), 'LAnkle': (0.60, 0.05), 
-            'LSmallToe': (0.65, 0.0), 'LBigToe': (0.58, 0.0), 'LHeel': (0.60, 0.02)
-        }
-    else:  # without feet
-        keypoints_positions = {
-            'Head': (0.50, 0.95), 'Neck': (0.50, 0.85), 'Nose': (0.50, 0.90),
-            'Hip': (0.50, 0.45), 'RHip': (0.42, 0.45), 'LHip': (0.58, 0.45),
-            'RShoulder': (0.40, 0.85), 'RElbow': (0.35, 0.75), 'RWrist': (0.25, 0.65),
-            'RKnee': (0.40, 0.35), 'RAnkle': (0.40, 0.20),
-            'LShoulder': (0.60, 0.85), 'LElbow': (0.65, 0.75), 'LWrist': (0.75, 0.65), 
-            'LKnee': (0.60, 0.35), 'LAnkle': (0.60, 0.20)
-        }
+    # 모든 키포인트와 위치 정의
+    all_keypoints = [
+        'Hip', 'RHip', 'LHip', 'RShoulder', 'RElbow', 'RWrist', 'RKnee', 'RAnkle',
+        'RSmallToe', 'RBigToe', 'RHeel', 'LShoulder', 'LElbow', 'LWrist', 'LKnee',
+        'LAnkle', 'LSmallToe', 'LBigToe', 'LHeel'
+    ]
+    keypoints_positions = {
+        'Hip': (0.50, 0.42), 'RHip': (0.42, 0.42), 'LHip': (0.58, 0.42),
+        'RShoulder': (0.40, 0.75), 'RElbow': (0.35, 0.65), 'RWrist': (0.25, 0.50),
+        'RKnee': (0.40, 0.25), 'RAnkle': (0.40, 0.05),
+        'RSmallToe': (0.35, 0.0), 'RBigToe': (0.42, 0.0), 'RHeel': (0.40, 0.02),
+        'LShoulder': (0.60, 0.75), 'LElbow': (0.65, 0.65), 'LWrist': (0.75, 0.50),
+        'LKnee': (0.60, 0.25), 'LAnkle': (0.60, 0.05),
+        'LSmallToe': (0.65, 0.0), 'LBigToe': (0.58, 0.0), 'LHeel': (0.60, 0.02)
+    }
     
-    # Create x, y coordinates for keypoints
-    keypoints_x, keypoints_y = zip(*[keypoints_positions.get(name, (0.5, 0.5)) for name in keypoints_names])
+    # 키포인트 좌표 생성
+    keypoints_x, keypoints_y = zip(*[keypoints_positions[name] for name in all_keypoints])
     
-    # Plot keypoints
+    # 초기 색상 설정
+    initial_colors = ['silver' if kp in keypoints_names else '#333333' for kp in all_keypoints]
+    
+    # scatter 플롯 생성
     selected_keypoints = []
-    scatter = ax_keypoints.scatter(keypoints_x, keypoints_y, c='silver', picker=True)
+    scatter = ax_keypoints.scatter(keypoints_x, keypoints_y, c=initial_colors, picker=True)
     
-    # Add keypoint labels
+    # 키포인트 라벨 추가
     keypoint_texts = [ax_keypoints.text(x + 0.02, y, name, va='center', fontsize=LABEL_SIZE, color='white', visible=False)
-                      for x, y, name in zip(keypoints_x, keypoints_y, keypoints_names)]
+                      for x, y, name in zip(keypoints_x, keypoints_y, all_keypoints)]
     
     ax_keypoints.set_xlim(0, 1)
     ax_keypoints.set_ylim(-0.1, 1)
     ax_keypoints.axis('off')
     
-    # Add selected keypoints display area
+    # 선택된 키포인트 표시 영역
     ax_selected = plt.axes([0.1, 0.08, 0.8, 0.04])
     ax_selected.axis('off')
     ax_selected.set_facecolor('black')
     selected_text = ax_selected.text(0.0, 0.5, 'Selected: None\nClick on keypoints to select them', 
-                                     va='center', fontsize=BUTTON_SIZE, wrap=True, color='white')
+                                    va='center', fontsize=BUTTON_SIZE, wrap=True, color='white')
     
-    # Add buttons side by side in the center
+    # 버튼 추가
     btn_width, btn_height, btn_y = 0.16, 0.04, 0.02
-    center_x = 0.5  
-
+    center_x = 0.5
     btn_all_none = plt.Button(plt.axes([center_x - 1.5*btn_width - 0.01, btn_y, btn_width, btn_height]), 'Select All')
     btn_toggle = plt.Button(plt.axes([center_x - btn_width/2, btn_y, btn_width, btn_height]), 'Show names')
     btn_ok = plt.Button(plt.axes([center_x + 0.5*btn_width + 0.01, btn_y, btn_width, btn_height]), 'OK')
     
     def toggle_labels(event):
         show_labels = not keypoint_texts[0].get_visible()
-        for text, name in zip(keypoint_texts, keypoints_names):
+        for text, name in zip(keypoint_texts, all_keypoints):
             text.set_visible(show_labels)
             text.set_fontweight('bold' if name in selected_keypoints else 'normal')
         btn_toggle.label.set_text('Hide names' if show_labels else 'Show names')
         plt.draw()
     
     btn_toggle.on_clicked(toggle_labels)
-    btn_ok.on_clicked(lambda event: handle_ok_button())
+    btn_ok.on_clicked(lambda event: plt.close())
     
     def select_all_none(event):
         if selected_keypoints:
             selected_keypoints.clear()
-            scatter.set_facecolors(['silver'] * len(keypoints_names))
-            for text in keypoint_texts:
-                text.set_fontweight('normal')
-            selected_text.set_text('Selected: None\nClick on keypoints to select them')
-            btn_all_none.label.set_text('Select All')
         else:
             selected_keypoints.extend(keypoints_names)
-            scatter.set_facecolors(['yellow'] * len(keypoints_names))
-            for text in keypoint_texts:
-                text.set_fontweight('bold')
-            selected_text.set_text(f'Selected: {len(keypoints_names)} keypoints')
-            btn_all_none.label.set_text('Select None')
-        plt.draw()
-    
-    btn_all_none.on_clicked(select_all_none)
-    
-    for btn in [btn_all_none, btn_toggle, btn_ok]:
-        btn.color = '#E0E0E0'
-        btn.hovercolor = '#FFFFFF'
-    
-    def on_pick(event):
-        ind = event.ind[0]
-        keypoint = keypoints_names[ind]
         
-        if keypoint in selected_keypoints:
-            selected_keypoints.remove(keypoint)
-            keypoint_texts[ind].set_fontweight('normal')
-        else:
-            selected_keypoints.append(keypoint)
-            keypoint_texts[ind].set_fontweight('bold')
+        colors = [
+            'yellow' if kp in selected_keypoints else 'silver' if kp in keypoints_names else '#333333'
+            for kp in all_keypoints
+        ]
+        scatter.set_facecolors(colors)
         
-        scatter.set_facecolors(['yellow' if n in selected_keypoints else 'silver' for n in keypoints_names])
+        for text, kp in zip(keypoint_texts, all_keypoints):
+            text.set_fontweight('bold' if kp in selected_keypoints else 'normal')
         
         if selected_keypoints:
             text_parts = ['Selected: '] + [f'$\\bf{{{kp}}}$' if i == 0 else f', $\\bf{{{kp}}}$' for i, kp in enumerate(selected_keypoints)]
@@ -549,6 +521,40 @@ def select_keypoints(keypoints_names):
             btn_all_none.label.set_text('Select All')
         
         plt.draw()
+    
+    btn_all_none.on_clicked(select_all_none)
+    
+    for btn in [btn_all_none, btn_toggle, btn_ok]:
+        btn.color = '#E0E0E0'
+        btn.hovercolor = '#FFFFFF'
+    
+    def on_pick(event):
+        ind = event.ind[0]
+        keypoint = all_keypoints[ind]
+        if keypoint in keypoints_names:
+            if keypoint in selected_keypoints:
+                selected_keypoints.remove(keypoint)
+            else:
+                selected_keypoints.append(keypoint)
+            
+            colors = [
+                'yellow' if kp in selected_keypoints else 'silver' if kp in keypoints_names else '#333333'
+                for kp in all_keypoints
+            ]
+            scatter.set_facecolors(colors)
+            
+            for text, kp in zip(keypoint_texts, all_keypoints):
+                text.set_fontweight('bold' if kp in selected_keypoints else 'normal')
+            
+            if selected_keypoints:
+                text_parts = ['Selected: '] + [f'$\\bf{{{kp}}}$' if i == 0 else f', $\\bf{{{kp}}}$' for i, kp in enumerate(selected_keypoints)]
+                selected_text.set_text(''.join(text_parts))
+                btn_all_none.label.set_text('Select None')
+            else:
+                selected_text.set_text('Selected: None\nClick on keypoints to select them')
+                btn_all_none.label.set_text('Select All')
+            
+            plt.draw()
     
     fig.canvas.mpl_connect('pick_event', on_pick)
     
