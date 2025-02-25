@@ -207,7 +207,7 @@ def highlight_selected_box(rect, annotation):
     '''
 
     rect.set_linewidth(2)
-    rect.set_edgecolor('yellow')
+    rect.set_edgecolor('darkorange')
     rect.set_facecolor((1, 1, 1, 0.1))
     annotation.set_fontsize(8)
     annotation.set_fontweight('bold')
@@ -219,7 +219,7 @@ def highlight_hover_box(rect, annotation):
     '''
 
     rect.set_linewidth(2)
-    rect.set_edgecolor('yellow')
+    rect.set_edgecolor('darkorange')
     rect.set_facecolor((1, 1, 0, 0.2))
     annotation.set_fontsize(8)
     annotation.set_fontweight('bold')
@@ -303,7 +303,7 @@ def on_pick_keypoint(event, keypoints_names, selected_keypoints, scatter, keypoi
         selected_keypoints.append(keypoint)
         
     # Update scatter plot colors
-    scatter.set_facecolors([('yellow' if n in selected_keypoints else 'silver') 
+    scatter.set_facecolors([('darkorange' if n in selected_keypoints else 'blue') 
                           for n in keypoints_names])
     
     # Update container
@@ -431,12 +431,12 @@ def select_keypoints(keypoints_names):
     
     # figure 생성
     fig = plt.figure(figsize=(6, 8))
-    fig.patch.set_facecolor('black')
+    fig.patch.set_facecolor('white')
 
     # 키포인트 선택 영역
     ax_keypoints = plt.axes([0.1, 0.2, 0.8, 0.7])
-    ax_keypoints.set_facecolor('black')
-    ax_keypoints.set_title('Select keypoints to synchronize on', fontsize=TITLE_SIZE, pad=10, color='white')
+    ax_keypoints.set_facecolor('white')
+    ax_keypoints.set_title('Select keypoints to synchronize on', fontsize=TITLE_SIZE, pad=10, color='black')
     
     # 모든 키포인트와 위치 정의
     all_keypoints = [
@@ -458,14 +458,14 @@ def select_keypoints(keypoints_names):
     keypoints_x, keypoints_y = zip(*[keypoints_positions[name] for name in all_keypoints])
     
     # 초기 색상 설정
-    initial_colors = ['silver' if kp in keypoints_names else '#333333' for kp in all_keypoints]
+    initial_colors = ['blue' if kp in keypoints_names else 'silver' for kp in all_keypoints]
     
     # scatter 플롯 생성
     selected_keypoints = []
     scatter = ax_keypoints.scatter(keypoints_x, keypoints_y, c=initial_colors, picker=True)
     
     # 키포인트 라벨 추가
-    keypoint_texts = [ax_keypoints.text(x + 0.02, y, name, va='center', fontsize=LABEL_SIZE, color='white', visible=False)
+    keypoint_texts = [ax_keypoints.text(x + 0.02, y, name, va='center', fontsize=LABEL_SIZE, color='black', visible=False)
                       for x, y, name in zip(keypoints_x, keypoints_y, all_keypoints)]
     
     ax_keypoints.set_xlim(0, 1)
@@ -477,7 +477,7 @@ def select_keypoints(keypoints_names):
     ax_selected.axis('off')
     ax_selected.set_facecolor('black')
     selected_text = ax_selected.text(0.0, 0.5, 'Selected: None\nClick on keypoints to select them', 
-                                    va='center', fontsize=BUTTON_SIZE, wrap=True, color='white')
+                                    va='center', fontsize=BUTTON_SIZE, wrap=True, color='black')
     
     # 버튼 추가
     btn_width, btn_height, btn_y = 0.16, 0.04, 0.02
@@ -504,7 +504,7 @@ def select_keypoints(keypoints_names):
             selected_keypoints.extend(keypoints_names)
         
         colors = [
-            'yellow' if kp in selected_keypoints else 'silver' if kp in keypoints_names else '#333333'
+            'darkorange' if kp in selected_keypoints else 'blue' if kp in keypoints_names else 'silver'
             for kp in all_keypoints
         ]
         scatter.set_facecolors(colors)
@@ -525,8 +525,8 @@ def select_keypoints(keypoints_names):
     btn_all_none.on_clicked(select_all_none)
     
     for btn in [btn_all_none, btn_toggle, btn_ok]:
-        btn.color = '#E0E0E0'
-        btn.hovercolor = '#FFFFFF'
+        btn.color = '#D3D3D3'  # Light gray
+        btn.hovercolor = '#A9A9A9'  # Darker gray on hover
     
     def on_pick(event):
         ind = event.ind[0]
@@ -538,7 +538,7 @@ def select_keypoints(keypoints_names):
                 selected_keypoints.append(keypoint)
             
             colors = [
-                'yellow' if kp in selected_keypoints else 'silver' if kp in keypoints_names else '#333333'
+                'darkorange' if kp in selected_keypoints else 'blue' if kp in keypoints_names else 'silver'
                 for kp in all_keypoints
             ]
             scatter.set_facecolors(colors)
@@ -570,11 +570,11 @@ def init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_aro
     # Define UI parameters
     UI_PARAMS = {
         'colors': {
-            'background': 'black',
-            'text': 'white',
-            'control': '#303030',
-            'control_hover': '#404040',
-            'slider': 'lightblue',
+            'background': 'white',
+            'text': 'black',
+            'control': '#D3D3D3',
+            'control_hover': '#A9A9A9',
+            'slider': '#4682B4',
             'slider_edge': (1, 1, 1, 0.5)
         },
         'sizes': {
@@ -639,7 +639,7 @@ def init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_aro
     range_end = min(frame_number + time_range_around_maxspeed*fps, search_around_frames[cam_index][1])
     highlight = ax_slider.axvspan(range_start, range_end, 
                                 ymin=0.20, ymax=0.80,  # Match the height with vertices in the update_frame function
-                                color='yellow', alpha=0.5)
+                                color='darkorange', alpha=0.5)
 
     # Store highlight for later updates
     controls = {'range_highlight': highlight}
