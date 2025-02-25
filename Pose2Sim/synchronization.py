@@ -326,6 +326,131 @@ def on_pick_keypoint(event, keypoints_names, selected_keypoints, scatter, keypoi
     fig.canvas.draw_idle()
 
 
+def update_highlight(central_frame, delta_time, fps, search_around_frames, cam_index, ax_slider, controls):
+    """슬라이더의 하이라이트 범위를 업데이트합니다."""
+    if 'range_highlight' in controls:
+        controls['range_highlight'].remove()
+    range_start = max(central_frame - delta_time * fps, search_around_frames[cam_index][0])
+    range_end = min(central_frame + delta_time * fps, search_around_frames[cam_index][1])
+    controls['range_highlight'] = ax_slider.axvspan(range_start, range_end, ymin=0.2, ymax=0.8, color='darkorange', alpha=0.5, zorder=4)
+
+
+def on_slider_change(val, fps, controls, fig, search_around_frames, cam_index, ax_slider):
+    """슬라이더 값이 변경될 때 호출됩니다."""
+    frame_number = int(val)
+    central_time = frame_number / fps
+    controls['central_time_textbox'].set_val(f"{central_time:.2f}")
+    try:
+        delta_time = float(controls['delta_time_textbox'].text)
+    except ValueError:
+        delta_time = 0
+    update_highlight(frame_number, delta_time, fps, search_around_frames, cam_index, ax_slider, controls)
+    fig.canvas.draw_idle()
+
+
+def on_central_time_submit(text, fps, controls, fig, search_around_frames, cam_index, ax_slider, frame_slider):
+    """중앙 시간 텍스트박스에 값이 제출될 때 호출됩니다."""
+    try:
+        central_time = float(text)
+        frame_number = int(round(central_time * fps))
+        frame_number = max(search_around_frames[cam_index][0], min(frame_number, search_around_frames[cam_index][1]))
+        frame_slider.set_val(frame_number)
+        try:
+            delta_time = float(controls['delta_time_textbox'].text)
+        except ValueError:
+            delta_time = 0
+        update_highlight(frame_number, delta_time, fps, search_around_frames, cam_index, ax_slider, controls)
+        fig.canvas.draw_idle()
+    except ValueError:
+        pass  # 유효하지 않은 입력 무시
+
+
+def on_delta_time_submit(text, fps, search_around_frames, cam_index, controls, fig, ax_slider, frame_slider):
+    """델타 시간 텍스트박스에 값이 제출될 때 호출됩니다."""
+    try:
+        delta_time = float(text)
+        if delta_time < 0:
+            delta_time = 0  # 음수가 되지 않도록 보장
+        frame_number = int(frame_slider.val)
+        update_highlight(frame_number, delta_time, fps, search_around_frames, cam_index, ax_slider, controls)
+        fig.canvas.draw_idle()
+    except ValueError:
+        pass  # 유효하지 않은 입력 무시
+
+
+def on_highlight_press(event, controls, fps, search_around_frames, cam_index, ax_slider, fig):
+    """하이라이트 영역을 클릭했을 때 호출되는 함수"""
+    if event.inaxes != ax_slider or event.button != 1:  # 왼쪽 버튼만 처리
+        return
+    
+    highlight = controls.get('range_highlight')
+    if not highlight:
+        return
+        
+    # 클릭한 x 좌표
+    click_x = event.xdata
+    
+    # 하이라이트의 현재 범위
+    highlight_start = highlight.get_xy()[0][0]
+    highlight_width = highlight.get_xy()[2][0] - highlight_start
+    highlight_end = highlight_start + highlight_width
+    
+    # 클릭 위치가 하이라이트 영역의 가장자리(±5프레임) 안에 있는지 확인
+    edge_tolerance = 5
+    if abs(click_x - highlight_start) <= edge_tolerance:
+        controls['dragging'] = 'left'
+    elif abs(click_x - highlight_end) <= edge_tolerance:
+        controls['dragging'] = 'right'
+    else:
+        controls['dragging'] = None
+    
+    if controls['dragging']:
+        controls['drag_start_x'] = click_x
+
+def on_highlight_motion(event, controls, fps, search_around_frames, cam_index, ax_slider, fig):
+    """하이라이트 영역을 드래그할 때 호출되는 함수"""
+    if not controls.get('dragging') or event.inaxes != ax_slider:
+        return
+        
+    highlight = controls.get('range_highlight')
+    if not highlight:
+        return
+    
+    # 현재 중앙 프레임
+    current_frame = int(float(controls['central_time_textbox'].text) * fps)
+    
+    # 드래그 거리 계산
+    drag_distance = event.xdata - controls['drag_start_x']
+    
+    # 현재 델타 시간
+    try:
+        current_delta = float(controls['delta_time_textbox'].text)
+    except ValueError:
+        current_delta = 0
+    
+    # 드래그에 따른 새로운 델타 시간 계산
+    if controls['dragging'] == 'left':
+        new_delta = current_delta - drag_distance / (2 * fps)  # 왼쪽을 드래그하면 범위가 줄어듦
+    else:  # right
+        new_delta = current_delta + drag_distance / (2 * fps)  # 오른쪽을 드래그하면 범위가 늘어남
+    
+    # 최소 범위 제한 (1초)
+    new_delta = max(0.5, new_delta)
+    
+    # 텍스트박스 업데이트 및 하이라이트 다시 그리기
+    controls['delta_time_textbox'].set_val(f"{new_delta:.2f}")
+    update_highlight(current_frame, new_delta, fps, search_around_frames, cam_index, ax_slider, controls)
+    fig.canvas.draw_idle()
+    
+    # 드래그 시작 위치 업데이트
+    controls['drag_start_x'] = event.xdata
+
+def on_highlight_release(event, controls, fps, search_around_frames, cam_index, ax_slider, fig):
+    """마우스 버튼을 놓았을 때 호출되는 함수"""
+    controls['dragging'] = None
+    controls['drag_start_x'] = None
+
+
 def draw_bounding_boxes_and_annotations(ax, bounding_boxes_list, rects, annotations):
     '''
     Draws the bounding boxes and annotations on the given axes.
@@ -565,9 +690,9 @@ def select_keypoints(keypoints_names):
 
 def init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_around_frames, time_range_around_maxspeed, fps, cam_index):
     '''
-    Step 2: Initialize UI for person and frame selection only (no keypoint selection)
+    Step 2: 사람과 프레임 선택을 위한 UI 초기화 (키포인트 선택 제외)
     '''
-    # Define UI parameters
+    # UI 파라미터 정의
     UI_PARAMS = {
         'colors': {
             'background': 'white',
@@ -575,7 +700,7 @@ def init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_aro
             'control': '#D3D3D3',
             'control_hover': '#A9A9A9',
             'slider': '#4682B4',
-            'slider_edge': (1, 1, 1, 0.5)
+            'slider_edge': (0.5, 0.5, 0.5, 0.5)
         },
         'sizes': {
             'label': 10,
@@ -588,35 +713,35 @@ def init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_aro
             'btn_width': 0.04,
             'btn_spacing': 0.01,
             'control_height': 0.04,
-            'y_position': 0.08
+            'y_position': 0.1
         }
     }
 
-    # Set up the figure and main axes
+    # 프레임 크기와 방향을 기반으로 UI 설정
     frame_height, frame_width = frame_rgb.shape[:2]
     is_vertical = frame_height > frame_width
     
-    # Calculate appropriate figure height based on video orientation
+    # 비디오 방향에 따라 적절한 피규어 높이 계산
     if is_vertical:
-        fig_height = frame_height / 250 # for vertical videos
+        fig_height = frame_height / 250  # 세로 비디오용
     else:
-        # For horizontal videos
-        fig_height = max(frame_height / 300, 6)
+        fig_height = max(frame_height / 300, 6)  # 가로 비디오용
     
     fig = plt.figure(figsize=(8, fig_height))
     fig.patch.set_facecolor(UI_PARAMS['colors']['background'])
 
-    # Adjust UI layout based on video orientation
-    video_axes_height = 0.7 if is_vertical else 0.6  # Give more space for controls in horizontal videos
-    slider_y = 0.15 if is_vertical else 0.2  # Move slider down a bit for horizontal videos
-    controls_y = UI_PARAMS['layout']['y_position'] if is_vertical else 0.1  # Move controls up for horizontal videos
+    # 비디오 방향에 따라 UI 레이아웃 조정
+    video_axes_height = 0.7 if is_vertical else 0.6
+    slider_y = 0.15 if is_vertical else 0.2
+    controls_y = UI_PARAMS['layout']['y_position'] if is_vertical else 0.1
+    lower_controls_y = controls_y - 0.05  # 아래쪽 컨트롤을 위한 y 좌표
     
     ax_video = plt.axes([0.1, 0.2, 0.8, video_axes_height])
     ax_video.imshow(frame_rgb)
     ax_video.axis('off')
     ax_video.set_facecolor(UI_PARAMS['colors']['background'])
 
-    # Create frame slider
+    # 프레임 슬라이더 생성
     ax_slider = plt.axes([ax_video.get_position().x0, slider_y, ax_video.get_position().width, 0.04])
     ax_slider.set_facecolor(UI_PARAMS['colors']['background'])
     frame_slider = Slider(
@@ -634,43 +759,49 @@ def init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_aro
     frame_slider.poly.set_linewidth(1)
     frame_slider.valtext.set_visible(False)
 
-    # Add yellow highlight for time range around maxspeed
-    range_start = max(frame_number - time_range_around_maxspeed*fps, search_around_frames[cam_index][0])
-    range_end = min(frame_number + time_range_around_maxspeed*fps, search_around_frames[cam_index][1])
+    # 최대 속도 주변 시간 범위에 대한 하이라이트 추가
+    range_start = max(frame_number - time_range_around_maxspeed * fps, search_around_frames[cam_index][0])
+    range_end = min(frame_number + time_range_around_maxspeed * fps, search_around_frames[cam_index][1])
     highlight = ax_slider.axvspan(range_start, range_end, 
-                                ymin=0.20, ymax=0.80,  # Match the height with vertices in the update_frame function
-                                color='darkorange', alpha=0.5)
+                                  ymin=0.20, ymax=0.80,
+                                  color='darkorange', alpha=0.5, zorder=4)
 
-    # Store highlight for later updates
+    # 하이라이트를 나중에 업데이트할 수 있도록 저장
     controls = {'range_highlight': highlight}
-    
-    # Initialize controls dictionary
     controls['frame_slider'] = frame_slider
     
-    # Calculate positions for UI elements
-    center_x = 0.5
-    start_x = center_x - (UI_PARAMS['layout']['total_width'] / 2)
-
-    # Create person textbox
+    # UI 요소들의 위치 계산
+    controls_y = UI_PARAMS['layout']['y_position']
+    lower_controls_y = controls_y - 0.05  # 아래쪽 컨트롤을 위한 y 좌표
+    
+    # 사람 텍스트박스 생성 (중앙에 배치)
     controls['person_textbox'] = create_textbox(
-        [start_x + 0.27, controls_y, UI_PARAMS['layout']['textbox_width'], UI_PARAMS['layout']['control_height']],
+        [0.5 - UI_PARAMS['layout']['textbox_width']/2 + 0.17, controls_y, UI_PARAMS['layout']['textbox_width'], UI_PARAMS['layout']['control_height']],
         f"{cam_name}: Synchronize on person number",
         '0',
         UI_PARAMS
     )
 
-    # Create frame textbox
-    controls['frame_textbox'] = create_textbox(
-        [start_x + UI_PARAMS['layout']['textbox_width'] + 0.39 + UI_PARAMS['layout']['btn_spacing'], controls_y, UI_PARAMS['layout']['textbox_width'], UI_PARAMS['layout']['control_height']],
+    # 중앙 시간 텍스트박스 생성 (아래줄 왼쪽)
+    controls['central_time_textbox'] = create_textbox(
+        [0.5 - UI_PARAMS['layout']['textbox_width']/2 - 0.05, lower_controls_y, UI_PARAMS['layout']['textbox_width'], UI_PARAMS['layout']['control_height']],
         'around time',
-        f"{frame_number/fps:.2f} ±{time_range_around_maxspeed}",
+        f"{frame_number / fps:.2f}",
+        UI_PARAMS
+    )
+
+    # 델타 시간 텍스트박스 생성 (아래줄 중앙)
+    controls['delta_time_textbox'] = create_textbox(
+        [0.5 - UI_PARAMS['layout']['textbox_width']/2 + 0.07, lower_controls_y, UI_PARAMS['layout']['textbox_width'], UI_PARAMS['layout']['control_height']],
+        '±',
+        f"{time_range_around_maxspeed:.2f}",
         UI_PARAMS
     )
     
-    # Create OK button
-    ok_ax = plt.axes([start_x + 2 * (UI_PARAMS['layout']['textbox_width'] + UI_PARAMS['layout']['btn_spacing']) + 0.38, controls_y, UI_PARAMS['layout']['btn_width'] * 1.5, UI_PARAMS['layout']['control_height']])
+    # OK 버튼 생성 (아래줄 오른쪽)
+    ok_ax = plt.axes([0.5 - UI_PARAMS['layout']['textbox_width']/2 + 0.17, lower_controls_y, UI_PARAMS['layout']['btn_width'] * 1.5, UI_PARAMS['layout']['control_height']])
     ok_ax.set_facecolor(UI_PARAMS['colors']['control'])
-    controls['btn_ok'] = plt.Button(
+    controls['btn_ok'] = Button(
         ok_ax, 
         'OK',
         color=UI_PARAMS['colors']['control'],
@@ -679,7 +810,7 @@ def init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_aro
     controls['btn_ok'].label.set_color(UI_PARAMS['colors']['text'])
     controls['btn_ok'].label.set_fontsize(UI_PARAMS['sizes']['button'])
 
-    # Initialize containers for dynamic elements
+    # 동적 요소를 위한 컨테이너 초기화
     containers = {
         'rects': [],
         'annotations': [],
@@ -687,14 +818,29 @@ def init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_aro
         'selected_idx': [0]
     }
 
-    # Connect hover event
+    # 호버 이벤트 연결
     fig.canvas.mpl_connect('motion_notify_event', 
         lambda event: on_hover(event, fig, containers['rects'], 
                              containers['annotations'], 
                              containers['bounding_boxes_list'],
                              containers['selected_idx']))
 
-    # Return UI components
+    # 이벤트 핸들러를 lambda를 사용하여 연결
+    frame_slider.on_changed(lambda val: on_slider_change(val, fps, controls, fig, search_around_frames, cam_index, ax_slider))
+    controls['central_time_textbox'].on_submit(lambda text: on_central_time_submit(text, fps, controls, fig, search_around_frames, cam_index, ax_slider, frame_slider))
+    controls['delta_time_textbox'].on_submit(lambda text: on_delta_time_submit(text, fps, search_around_frames, cam_index, controls, fig, ax_slider, frame_slider))
+
+    # 하이라이트 드래그 이벤트 연결
+    controls['dragging'] = None
+    controls['drag_start_x'] = None
+    fig.canvas.mpl_connect('button_press_event', 
+        lambda event: on_highlight_press(event, controls, fps, search_around_frames, cam_index, ax_slider, fig))
+    fig.canvas.mpl_connect('motion_notify_event', 
+        lambda event: on_highlight_motion(event, controls, fps, search_around_frames, cam_index, ax_slider, fig))
+    fig.canvas.mpl_connect('button_release_event', 
+        lambda event: on_highlight_release(event, controls, fps, search_around_frames, cam_index, ax_slider, fig))
+
+    # UI 구성 요소 반환
     return {
         'fig': fig,
         'ax_video': ax_video,
@@ -717,7 +863,7 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
     # Step 2
     selected_id_list = []
     approx_time_maxspeed = []
-    keypoints_to_consider = selected_keypoints  # Changed: directly use selected_keypoints instead of creating a list
+    keypoints_to_consider = selected_keypoints
     
     try: # video files
         video_files_dict = {cam_name: file for cam_name in cam_names for file in vid_or_img_files if cam_name in os.path.basename(file)}
@@ -763,14 +909,16 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
         # Add slider update handler
         def update_frame(val):
             frame_num = int(val)
-            ui['controls']['frame_textbox'].eventson = False  # Temporarily disable events
-            new_time = frame_num / fps
-            ui['controls']['frame_textbox'].set_val(f"{new_time:.2f} ±{time_range_around_maxspeed}")
-            ui['controls']['frame_textbox'].eventson = True
+            central_time = frame_num / fps
+            ui['controls']['central_time_textbox'].set_val(f"{central_time:.2f}")
             
             # Update yellow highlight position
-            range_start = max(frame_num - time_range_around_maxspeed * fps, search_around_frames[i][0])
-            range_end = min(frame_num + time_range_around_maxspeed * fps, search_around_frames[i][1])
+            try:
+                delta_time = float(ui['controls']['delta_time_textbox'].text)
+            except ValueError:
+                delta_time = 0
+            range_start = max(frame_num - delta_time * fps, search_around_frames[i][0])
+            range_end = min(frame_num + delta_time * fps, search_around_frames[i][1])
             
             # Update highlight vertices
             vertices = np.array([
@@ -789,29 +937,45 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
                         ui['ax_video'], ui['fig'])
             
             ui['fig'].canvas.draw_idle()
-            
-        ui['fig'].canvas.mpl_connect('key_press_event', lambda event: handle_key_press(event, ui['controls']['frame_textbox'],
-                                    search_around_frames, i, cap, ui['ax_video'], frame_to_json, pose_dir,
-                                    json_dirs_names[i], ui['containers']['rects'], ui['containers']['annotations'], 
-                                    bounding_boxes_list, ui['fig'], time_range_around_maxspeed, fps, ui))
-                
+        
         ui['controls']['frame_slider'].on_changed(update_frame)
         
-        # Update frame textbox to also update slider
-        def update_textbox_and_slider(text):
-            handle_frame_change(None, int(float(text.split(' ±')[0]) * fps), ui['controls']['frame_textbox'], cap, ui['ax_video'],
-                              frame_to_json, pose_dir, json_dirs_names[i], ui['containers']['rects'],
-                              ui['containers']['annotations'], bounding_boxes_list, ui['fig'],
-                              search_around_frames, i, time_range_around_maxspeed, fps, ui)
+        # Update central time textbox to also update slider
+        def update_central_time(text):
             try:
-                frame_num = int(float(text.split(' ±')[0]) * fps)
-                if search_around_frames[i][0] <= frame_num <= search_around_frames[i][1]:
-                    ui['controls']['frame_slider'].set_val(frame_num)
+                central_time = float(text)
+                frame_num = int(round(central_time * fps))
+                frame_num = max(search_around_frames[i][0], min(frame_num, search_around_frames[i][1]))
+                ui['controls']['frame_slider'].set_val(frame_num)
+                update_frame(frame_num)
             except ValueError:
                 pass
         
-        ui['controls']['frame_textbox'].on_submit(update_textbox_and_slider)
-                                 
+        ui['controls']['central_time_textbox'].on_submit(update_central_time)
+        
+        # Update delta time textbox to update highlight
+        def update_delta_time(text):
+            try:
+                delta_time = float(text)
+                if delta_time < 0:
+                    delta_time = 0
+                frame_num = int(ui['controls']['frame_slider'].val)
+                range_start = max(frame_num - delta_time * fps, search_around_frames[i][0])
+                range_end = min(frame_num + delta_time * fps, search_around_frames[i][1])
+                vertices = np.array([
+                    [range_start, 0.20],  # Left bottom
+                    [range_start, 0.80],  # Left top
+                    [range_end, 0.80],    # Right top
+                    [range_end, 0.20],    # Right bottom
+                    [range_start, 0.20]   # Back to left bottom (closed polygon)
+                ])
+                ui['controls']['range_highlight'].xy = vertices
+                ui['fig'].canvas.draw_idle()
+            except ValueError:
+                pass
+        
+        ui['controls']['delta_time_textbox'].on_submit(update_delta_time)
+        
         # Add click event handler
         ui['fig'].canvas.mpl_connect('button_press_event', 
             lambda event: on_click(event, ui['ax_video'], bounding_boxes_list, 
@@ -822,11 +986,23 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
             lambda text: handle_person_change(text, ui['containers']['selected_idx'], ui['controls']['person_textbox']))
 
         # OK button
+        def handle_ok_button():
+            try:
+                central_time = float(ui['controls']['central_time_textbox'].text)
+                delta_time = float(ui['controls']['delta_time_textbox'].text)
+                current_frame = int(round(central_time * fps))
+                selected_id_list.append(selected_idx_container[0])
+                approx_time_maxspeed.append(current_frame / fps)
+                logging.info(f"cam{i}: Synchronize on person number {selected_idx_container[0]}, around time {central_time:.2f} ± {delta_time:.2f}")
+                plt.close(ui['fig'])
+            except ValueError:
+                logging.warning('Invalid input in textboxes.')
+
         btn_ok = ui['controls']['btn_ok']
         btn_ok.on_clicked(lambda event: handle_ok_button())
 
         # Keyboard navigation
-        ui['fig'].canvas.mpl_connect('key_press_event', lambda event: handle_key_press(event, ui['controls']['frame_textbox'],
+        ui['fig'].canvas.mpl_connect('key_press_event', lambda event: handle_key_press(event, ui['controls']['central_time_textbox'],
                               search_around_frames, i, cap, ui['ax_video'], frame_to_json, pose_dir,
                               json_dirs_names[i], ui['containers']['rects'], ui['containers']['annotations'], bounding_boxes_list, ui['fig'],
                               time_range_around_maxspeed, fps, ui))
@@ -837,7 +1013,7 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
 
         # Store selected values after OK button is clicked
         selected_id_list.append(selected_idx_container[0])
-        current_frame = int(float(ui['controls']['frame_textbox'].text.split(' ±')[0]) * fps)
+        current_frame = int(round(float(ui['controls']['central_time_textbox'].text) * fps))
         approx_time_maxspeed.append(current_frame / fps)
         logging.info(f'--> Camera #{i}: selected person #{selected_idx_container[0]} at time #{current_frame / fps:.2f}')
     
