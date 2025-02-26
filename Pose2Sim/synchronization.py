@@ -113,7 +113,6 @@ def handle_ok_button(ui, fps, i, selected_id_list, approx_time_maxspeed):
         current_frame = int(round(central_time * fps))
         selected_id_list.append(ui['containers']['selected_idx'][0])
         approx_time_maxspeed.append(current_frame / fps)
-        logging.info(f"cam{i}: Synchronize on person number {ui['containers']['selected_idx'][0]}, around time {central_time:.2f} ± {delta_time:.2f}")
         plt.close(ui['fig'])
     except ValueError:
         logging.warning('Invalid input in textboxes.')
@@ -332,36 +331,6 @@ def on_slider_change(val, fps, controls, fig, search_around_frames, cam_index, a
         delta_time = 0
     update_highlight(frame_number, delta_time, fps, search_around_frames, cam_index, ax_slider, controls)
     fig.canvas.draw_idle()
-
-
-def on_central_time_submit(text, fps, controls, fig, search_around_frames, cam_index, ax_slider, frame_slider):
-    """Called when a value is submitted to the central time textbox."""
-    try:
-        central_time = float(text)
-        frame_number = int(round(central_time * fps))
-        frame_number = max(search_around_frames[cam_index][0], min(frame_number, search_around_frames[cam_index][1]))
-        frame_slider.set_val(frame_number)
-        try:
-            delta_time = float(controls['delta_time_textbox'].text)
-        except ValueError:
-            delta_time = 0
-        update_highlight(frame_number, delta_time, fps, search_around_frames, cam_index, ax_slider, controls)
-        fig.canvas.draw_idle()
-    except ValueError:
-        pass  # Ignore invalid input
-
-
-def on_delta_time_submit(text, fps, search_around_frames, cam_index, controls, fig, ax_slider, frame_slider):
-    """Called when a value is submitted to the delta time textbox."""
-    try:
-        delta_time = float(text)
-        if delta_time < 0:
-            delta_time = 0  # Ensure it doesn't become negative
-        frame_number = int(frame_slider.val)
-        update_highlight(frame_number, delta_time, fps, search_around_frames, cam_index, ax_slider, controls)
-        fig.canvas.draw_idle()
-    except ValueError:
-        pass  # Ignore invalid input
 
 
 def draw_bounding_boxes_and_annotations(ax, bounding_boxes_list, rects, annotations):
@@ -869,7 +838,7 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
         selected_id_list.append(selected_idx_container[0])
         current_frame = int(round(float(ui['controls']['central_time_textbox'].text) * fps))
         approx_time_maxspeed.append(current_frame / fps)
-        logging.info(f'--> Camera #{i}: selected person #{selected_idx_container[0]} at time #{current_frame / fps:.2f}')
+        logging.info(f'--> Camera #{i}: selected person #{selected_idx_container[0]} at time #{current_frame / fps:.2f}±{time_range_around_maxspeed}')
     
     return selected_id_list, keypoints_to_consider, approx_time_maxspeed
 
