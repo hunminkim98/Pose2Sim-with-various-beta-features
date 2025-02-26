@@ -112,7 +112,6 @@ def handle_ok_button(ui, fps, i, selected_id_list, approx_time_maxspeed):
         delta_time = float(ui['controls']['delta_time_textbox'].text)
         current_frame = int(round(central_time * fps))
         selected_id_list.append(ui['containers']['selected_idx'][0])
-        approx_time_maxspeed.append(current_frame / fps)
         plt.close(ui['fig'])
     except ValueError:
         logging.warning('Invalid input in textboxes.')
@@ -511,7 +510,7 @@ def select_keypoints(keypoints_names):
     BTN_HOVER_COLOR = '#A9A9A9'  # Darker gray on hover
     
     # Create figure
-    fig = plt.figure(figsize=(6, 8))
+    fig = plt.figure(figsize=(6, 8), num='Synchronizing cameras')
     fig.patch.set_facecolor('white')
 
     # Keypoint selection area
@@ -628,7 +627,7 @@ def init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_aro
     else:
         fig_height = max(frame_height / 300, 6)  # For horizontal videos
     
-    fig = plt.figure(figsize=(8, fig_height))
+    fig = plt.figure(figsize=(8, fig_height), num=f'Synchronizing cameras')
     fig.patch.set_facecolor(BACKGROUND_COLOR)
 
     # Adjust UI layout based on video orientation
@@ -761,6 +760,7 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
     selected_id_list = []
     approx_time_maxspeed = []
     keypoints_to_consider = selected_keypoints
+    delta_times_list = []
     
     try: # video files
         video_files_dict = {cam_name: file for cam_name in cam_names for file in vid_or_img_files if cam_name in os.path.basename(file)}
@@ -774,6 +774,7 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
         if not vid_or_img_files_cam:
             logging.warning(f'No video file nor image directory found for camera {cam_name}')
             selected_id_list.append(None)
+            delta_times_list.append(time_range_around_maxspeed)  # Use default value for missing cameras
             continue
             
         try:
@@ -790,6 +791,7 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
         if frame_rgb is None:
             logging.warning(f'Cannot read frame {frame_number} from video {vid_or_img_files_cam}')
             selected_id_list.append(None)
+            delta_times_list.append(time_range_around_maxspeed)  # Use default value for missing cameras
             if isinstance(cap, cv2.VideoCapture):
                 cap.release()
             continue
@@ -838,9 +840,11 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
         selected_id_list.append(selected_idx_container[0])
         current_frame = int(round(float(ui['controls']['central_time_textbox'].text) * fps))
         approx_time_maxspeed.append(current_frame / fps)
-        logging.info(f'--> Camera #{i}: selected person #{selected_idx_container[0]} at time #{current_frame / fps:.2f}±{time_range_around_maxspeed}')
-    
-    return selected_id_list, keypoints_to_consider, approx_time_maxspeed
+        current_delta_time = float(ui['controls']['delta_time_textbox'].text)
+        delta_times_list.append(current_delta_time)  # Store the delta time for this camera
+        logging.info(f'--> Camera #{i}: selected person #{selected_idx_container[0]} at time #{current_frame / fps:.2f}±{current_delta_time}')
+
+    return selected_id_list, keypoints_to_consider, approx_time_maxspeed, delta_times_list
 
 
 # SYNC FUNCTIONS
@@ -1040,7 +1044,7 @@ def time_lagged_cross_corr(camx, camy, lag_range, show=True, ref_cam_name='0', c
         max_corr = np.nanmax(pearson_r)
 
         if show:
-            f, ax = plt.subplots(2,1)
+            f, ax = plt.subplots(2,1, num='Synchronizing cameras')
             # speed
             camx.plot(ax=ax[0], label = f'Reference: {ref_cam_name}')
             camy.plot(ax=ax[0], label = f'Compared: {cam_name}')
@@ -1204,12 +1208,37 @@ def synchronize_cams_all(config_dict):
     
     # Handle manual selection if synchronization_gui is True
     if synchronization_gui:
-        selected_id_list, keypoints_to_consider, approx_time_maxspeed = select_person(
+        selected_id_list, keypoints_to_consider, approx_time_maxspeed, delta_times_list = select_person(
             vid_or_img_files, cam_names, json_files_names_range, search_around_frames, 
             pose_dir, json_dirs_names, keypoints_names, time_range_around_maxspeed, fps)
+        
+        # Calculate lag_ranges using delta_times_list
+        lag_ranges = [int(dt * fps) for dt in delta_times_list]
+        
+        # Update search_around_frames if approx_time_maxspeed is a list
+        if isinstance(approx_time_maxspeed, list):
+            approx_frame_maxspeed = [int(fps * t) for t in approx_time_maxspeed]
+            search_around_frames = [[int(a-lag_ranges[i]) if a-lag_ranges[i]>0 else 0, 
+                                    int(a+lag_ranges[i]) if a+lag_ranges[i]<nb_frames_per_cam[i] else nb_frames_per_cam[i]+f_range[0]] 
+                                    for i,a in enumerate(approx_frame_maxspeed)]
+            
+            # Recalculate json_files_names_range and json_files_range with updated search_around_frames
+            json_files_names_range = [[j for j in json_files_cam if int(re.split(r'(\d+)',j)[-2]) in range(*frames_cam)] 
+                                     for (json_files_cam, frames_cam) in zip(json_files_names,search_around_frames)]
+            json_files_range = [[os.path.join(pose_dir, j_dir, j_file) for j_file in json_files_names_range[j]] 
+                               for j, j_dir in enumerate(json_dirs_names)]
+            
+            for cam, files in zip(cam_names, json_files_range):
+                logging.info(f"Camera {cam}: {len(files)} json files in range")
+                if files:
+                    logging.info(f"  First file: {os.path.basename(files[0])}")
+                    logging.info(f"  Last file: {os.path.basename(files[-1])}")
+                else:
+                    logging.warning(f"  No files found for camera {cam}")
+                               
     else:
         selected_id_list = [None] * cam_nb
-
+    
     for i in range(cam_nb):
         df_coords.append(convert_json2pandas(json_files_range[i], likelihood_threshold=likelihood_threshold, keypoints_ids=keypoints_ids, multi_person=multi_person, selected_id=selected_id_list[i]))
         df_coords[i] = drop_col(df_coords[i],3) # drop likelihood
