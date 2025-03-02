@@ -131,9 +131,8 @@ def handle_ok_button(ui, fps, i, selected_id_list, approx_time_maxspeed):
     '''
 
     try:
-        central_time = float(ui['controls']['central_time_textbox'].text)
-        delta_time = float(ui['controls']['delta_time_textbox'].text)
-        current_frame = int(round(central_time * fps))
+        float(ui['controls']['main_time_textbox'].text)
+        float(ui['controls']['time_RAM_textbox'].text)
         selected_id_list.append(ui['containers']['selected_idx'][0])
         plt.close(ui['fig'])
     except ValueError:
@@ -155,6 +154,43 @@ def handle_person_change(text, selected_idx_container, person_textbox):
     except ValueError:
         person_textbox.set_val('0')
         selected_idx_container[0] = 0
+
+
+def handle_frame_navigation(direction, frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
+                           pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig,
+                           time_range_around_maxspeed, fps, ui):
+    '''
+    Handles frame navigation (previous or next frame).
+    
+    INPUTS:
+    - direction: Integer, -1 for previous frame, 1 for next frame
+    - frame_textbox: TextBox widget for displaying and editing the frame number
+    - search_around_frames: Frame ranges to search around for each camera
+    - i: Current camera index
+    - cap: Video capture object
+    - ax_video: Axes for video display
+    - frame_to_json: Mapping from frame numbers to JSON files
+    - pose_dir: Directory containing pose data
+    - json_dir_name: Name of the JSON directory for the current camera
+    - rects: List of rectangle patches representing bounding boxes
+    - annotations: List of text annotations for each bounding box
+    - bounding_boxes_list: List of bounding boxes for detected persons
+    - fig: The figure object to update
+    - time_range_around_maxspeed: Time range to consider around max speed
+    - fps: Frames per second of the video
+    - ui: Dictionary containing all UI elements and state
+    '''
+
+    time_val = float(frame_textbox.text.split(' ±')[0])
+    current = round(time_val * fps)
+    
+    # Check bounds based on direction
+    if (direction < 0 and current > search_around_frames[i][0]) or \
+       (direction > 0 and current < search_around_frames[i][1]):
+        next_frame = current + direction
+        handle_frame_change(None, next_frame, frame_textbox, cap, ax_video, frame_to_json,
+                            pose_dir, json_dir_name, rects, annotations, bounding_boxes_list,
+                            fig, search_around_frames, i, time_range_around_maxspeed, fps, ui)
 
 
 def handle_frame_change(text, frame_number, frame_textbox, cap, ax_video, frame_to_json, 
@@ -201,72 +237,6 @@ def handle_frame_change(text, frame_number, frame_textbox, cap, ax_video, frame_
         fig.canvas.draw_idle()
 
 
-def handle_prev_frame(frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
-                      pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig,
-                      time_range_around_maxspeed, fps, ui):
-    '''
-    Handles the previous frame button click event.
-    
-    INPUTS:
-    - frame_textbox: TextBox widget for displaying and editing the frame number
-    - search_around_frames: Frame ranges to search around for each camera
-    - i: Current camera index
-    - cap: Video capture object
-    - ax_video: Axes for video display
-    - frame_to_json: Mapping from frame numbers to JSON files
-    - pose_dir: Directory containing pose data
-    - json_dir_name: Name of the JSON directory for the current camera
-    - rects: List of rectangle patches representing bounding boxes
-    - annotations: List of text annotations for each bounding box
-    - bounding_boxes_list: List of bounding boxes for detected persons
-    - fig: The figure object to update
-    - time_range_around_maxspeed: Time range to consider around max speed
-    - fps: Frames per second of the video
-    - ui: Dictionary containing all UI elements and state
-    '''
-
-    time_val = float(frame_textbox.text.split(' ±')[0])
-    current = round(time_val * fps)
-    if current > search_around_frames[i][0]:
-        prev_frame = current - 1
-        handle_frame_change(None, prev_frame, frame_textbox, cap, ax_video, frame_to_json,
-                            pose_dir, json_dir_name, rects, annotations, bounding_boxes_list,
-                            fig, search_around_frames, i, time_range_around_maxspeed, fps, ui)
-
-
-def handle_next_frame(frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
-                      pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig,
-                      time_range_around_maxspeed, fps, ui):
-    '''
-    Handles the next frame button click event.
-    
-    INPUTS:
-    - frame_textbox: TextBox widget for displaying and editing the frame number
-    - search_around_frames: Frame ranges to search around for each camera
-    - i: Current camera index
-    - cap: Video capture object
-    - ax_video: Axes for video display
-    - frame_to_json: Mapping from frame numbers to JSON files
-    - pose_dir: Directory containing pose data
-    - json_dir_name: Name of the JSON directory for the current camera
-    - rects: List of rectangle patches representing bounding boxes
-    - annotations: List of text annotations for each bounding box
-    - bounding_boxes_list: List of bounding boxes for detected persons
-    - fig: The figure object to update
-    - time_range_around_maxspeed: Time range to consider around max speed
-    - fps: Frames per second of the video
-    - ui: Dictionary containing all UI elements and state
-    '''
-
-    time_val = float(frame_textbox.text.split(' ±')[0])
-    current = round(time_val * fps)
-    if current < search_around_frames[i][1]:
-        next_frame = current + 1
-        handle_frame_change(None, next_frame, frame_textbox, cap, ax_video, frame_to_json,
-                            pose_dir, json_dir_name, rects, annotations, bounding_boxes_list,
-                            fig, search_around_frames, i, time_range_around_maxspeed, fps, ui)
-
-
 def handle_key_press(event, frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
                      pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig,
                      time_range_around_maxspeed, fps, ui):
@@ -292,14 +262,16 @@ def handle_key_press(event, frame_textbox, search_around_frames, i, cap, ax_vide
     - ui: Dictionary containing all UI elements and state
     '''
 
+    direction = 0
     if event.key == 'left':
-        handle_prev_frame(frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
-                          pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig,
-                          time_range_around_maxspeed, fps, ui)
+        direction = -1
     elif event.key == 'right':
-        handle_next_frame(frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
-                          pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig,
-                          time_range_around_maxspeed, fps, ui)
+        direction = 1
+        
+    if direction != 0:
+        handle_frame_navigation(direction, frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
+                              pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig,
+                              time_range_around_maxspeed, fps, ui)
 
 
 def handle_toggle_labels(event, keypoint_texts, containers, btn_toggle):
@@ -427,13 +399,13 @@ def on_slider_change(val, fps, controls, fig, search_around_frames, cam_index, a
     '''
 
     frame_number = int(val)
-    central_time = frame_number / fps
-    controls['central_time_textbox'].set_val(f"{central_time:.2f}")
+    main_time = frame_number / fps
+    controls['main_time_textbox'].set_val(f"{main_time:.2f}")
     try:
-        delta_time = float(controls['delta_time_textbox'].text)
+        time_RAM = float(controls['time_RAM_textbox'].text)
     except ValueError:
-        delta_time = 0
-    update_highlight(frame_number, delta_time, fps, search_around_frames, cam_index, ax_slider, controls)
+        time_RAM = 0
+    update_highlight(frame_number, time_RAM, fps, search_around_frames, cam_index, ax_slider, controls)
     fig.canvas.draw_idle()
 
 
@@ -455,23 +427,23 @@ def on_key(event, ui, fps, cap, frame_to_json, pose_dir, json_dirs_names, i, sea
     '''
 
     if event.key == 'left':
-        handle_prev_frame(ui['controls']['central_time_textbox'], search_around_frames, i, cap, ui['ax_video'], frame_to_json,
-                          pose_dir, json_dirs_names[i], ui['containers']['rects'], ui['containers']['annotations'], bounding_boxes_list, ui['fig'],
-                          float(ui['controls']['delta_time_textbox'].text), fps, ui)
+        handle_frame_navigation(-1, ui['controls']['main_time_textbox'], search_around_frames, i, cap, ui['ax_video'], frame_to_json,
+                              pose_dir, json_dirs_names[i], ui['containers']['rects'], ui['containers']['annotations'], bounding_boxes_list, ui['fig'],
+                              float(ui['controls']['time_RAM_textbox'].text), fps, ui)
     elif event.key == 'right':
-        handle_next_frame(ui['controls']['central_time_textbox'], search_around_frames, i, cap, ui['ax_video'], frame_to_json,
-                          pose_dir, json_dirs_names[i], ui['containers']['rects'], ui['containers']['annotations'], bounding_boxes_list, ui['fig'],
-                          float(ui['controls']['delta_time_textbox'].text), fps, ui)
+        handle_frame_navigation(1, ui['controls']['main_time_textbox'], search_around_frames, i, cap, ui['ax_video'], frame_to_json,
+                              pose_dir, json_dirs_names[i], ui['containers']['rects'], ui['containers']['annotations'], bounding_boxes_list, ui['fig'],
+                              float(ui['controls']['time_RAM_textbox'].text), fps, ui)
 
 
 ## UI Update Functions
-def update_highlight(central_frame, delta_time, fps, search_around_frames, cam_index, ax_slider, controls):
+def update_highlight(current_frame, time_RAM, fps, search_around_frames, cam_index, ax_slider, controls):
     '''
     Updates the highlighted range on the frame slider.
     
     INPUTS:
-    - central_frame: The current frame number
-    - delta_time: Time range in seconds to highlight around the central frame
+    - current_frame: The current frame number
+    - time_RAM: Time range in seconds to highlight around the current frame
     - fps: Frames per second of the video
     - search_around_frames: Valid frame range limits for the current camera
     - cam_index: Current camera index
@@ -481,19 +453,19 @@ def update_highlight(central_frame, delta_time, fps, search_around_frames, cam_i
 
     if 'range_highlight' in controls:
         controls['range_highlight'].remove()
-    range_start = max(central_frame - delta_time * fps, search_around_frames[cam_index][0])
-    range_end = min(central_frame + delta_time * fps, search_around_frames[cam_index][1])
+    range_start = max(current_frame - time_RAM * fps, search_around_frames[cam_index][0])
+    range_end = min(current_frame + time_RAM * fps, search_around_frames[cam_index][1])
     controls['range_highlight'] = ax_slider.axvspan(range_start, range_end, 
                                                   ymin=0.20, ymax=0.80,
                                                   color='darkorange', alpha=0.5, zorder=4)
 
 
-def update_central_time(text, fps, search_around_frames, i, ui, cap, frame_to_json, pose_dir, json_dirs_names, bounding_boxes_list):
+def update_main_time(text, fps, search_around_frames, i, ui, cap, frame_to_json, pose_dir, json_dirs_names, bounding_boxes_list):
     '''
-    Updates the UI based on changes to the central time textbox.
+    Updates the UI based on changes to the main time textbox.
     
     INPUTS:
-    - text: Text from the central time textbox
+    - text: Text from the main time textbox
     - fps: Frames per second of the video
     - search_around_frames: Valid frame range limits for each camera
     - i: Current camera index
@@ -506,8 +478,8 @@ def update_central_time(text, fps, search_around_frames, i, ui, cap, frame_to_js
     '''
 
     try:
-        central_time = float(text)
-        frame_num = int(round(central_time * fps))
+        main_time = float(text)
+        frame_num = int(round(main_time * fps))
         frame_num = max(search_around_frames[i][0], min(frame_num, search_around_frames[i][1]))
         ui['controls']['frame_slider'].set_val(frame_num)
         update_frame(frame_num, fps, ui, cap, frame_to_json, pose_dir, json_dirs_names, i, search_around_frames, bounding_boxes_list)
@@ -515,12 +487,13 @@ def update_central_time(text, fps, search_around_frames, i, ui, cap, frame_to_js
         pass
 
 
-def update_delta_time(text, fps, search_around_frames, i, ui): #TODO: Not delta time, should be replaced by a proper name
+def update_time_range_around_maxspeed(text, fps, search_around_frames, i, ui):
     '''
-    Updates the highlight range based on changes to the delta time textbox.
-    
+    Updates the highlight range based on changes to the time_RAM textbox.
+    time_RAM means time_range_around_maxspeed
+
     INPUTS:
-    - text: Text from the delta time textbox
+    - text: Text from the time_RAM textbox
     - fps: Frames per second of the video
     - search_around_frames: Valid frame range limits for each camera
     - i: Current camera index
@@ -528,11 +501,11 @@ def update_delta_time(text, fps, search_around_frames, i, ui): #TODO: Not delta 
     '''
     
     try:
-        delta_time = float(text)
-        if delta_time < 0:
-            delta_time = 0
+        time_RAM = float(text)
+        if time_RAM < 0:
+            time_RAM = 0
         frame_num = int(ui['controls']['frame_slider'].val)
-        update_highlight(frame_num, delta_time, fps, search_around_frames, i, ui['axes']['slider'], ui['controls'])
+        update_highlight(frame_num, time_RAM, fps, search_around_frames, i, ui['axes']['slider'], ui['controls'])
     except ValueError:
         pass
 
@@ -638,17 +611,17 @@ def update_frame(val, fps, ui, cap, frame_to_json, pose_dir, json_dirs_names, i,
     '''
 
     frame_num = int(val)
-    central_time = frame_num / fps
-    ui['controls']['central_time_textbox'].set_val(f"{central_time:.2f}")
+    main_time = frame_num / fps
+    ui['controls']['main_time_textbox'].set_val(f"{main_time:.2f}")
     
     # Update yellow highlight position
     try:
-        delta_time = float(ui['controls']['delta_time_textbox'].text)
+        time_RAM = float(ui['controls']['time_RAM_textbox'].text)
     except ValueError:
-        delta_time = 0
+        time_RAM = 0
         
     # Update highlight
-    update_highlight(frame_num, delta_time, fps, search_around_frames, i, ui['axes']['slider'], ui['controls'])
+    update_highlight(frame_num, time_RAM, fps, search_around_frames, i, ui['axes']['slider'], ui['controls'])
     
     # Update video frame and bounding boxes
     update_play(ui['cap'], ui['ax_video'].images[0], frame_num, frame_to_json, 
@@ -942,8 +915,8 @@ def init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_aro
          'sizes': {'label': LABEL_SIZE, 'text': TEXT_SIZE}}
     )
 
-    # Create central time textbox (lower left)
-    controls['central_time_textbox'] = create_textbox(
+    # Create main time textbox (lower left)
+    controls['main_time_textbox'] = create_textbox(
         [0.5 - TEXTBOX_WIDTH/2 - 0.05, lower_controls_y, TEXTBOX_WIDTH, CONTROL_HEIGHT],
         'around time',
         f"{frame_number / fps:.2f}",
@@ -951,8 +924,8 @@ def init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_aro
          'sizes': {'label': LABEL_SIZE, 'text': TEXT_SIZE}}
     )
 
-    # Create delta time textbox (lower center)
-    controls['delta_time_textbox'] = create_textbox(
+    # Create time RAM textbox (lower center)
+    controls['time_RAM_textbox'] = create_textbox(
         [0.5 - TEXTBOX_WIDTH/2 + 0.07, lower_controls_y, TEXTBOX_WIDTH, CONTROL_HEIGHT],
         '±',
         f"{time_range_around_maxspeed:.2f}",
@@ -998,8 +971,8 @@ def init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_aro
 
     # Connect event handlers using lambda
     frame_slider.on_changed(lambda val: on_slider_change(val, fps, controls, fig, search_around_frames, cam_index, ax_slider))
-    controls['central_time_textbox'].on_submit(lambda text: update_central_time(text, fps, search_around_frames, cam_index, ui, ui['cap'], frame_to_json, pose_dir, json_dirs_names, containers['bounding_boxes_list']))
-    controls['delta_time_textbox'].on_submit(lambda text: update_delta_time(text, fps, search_around_frames, cam_index, ui))
+    controls['main_time_textbox'].on_submit(lambda text: update_main_time(text, fps, search_around_frames, cam_index, ui, ui['cap'], frame_to_json, pose_dir, json_dirs_names, containers['bounding_boxes_list']))
+    controls['time_RAM_textbox'].on_submit(lambda text: update_time_range_around_maxspeed(text, fps, search_around_frames, cam_index, ui))
 
     return ui
 
@@ -1026,7 +999,7 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
     - selected_id_list: List of selected person IDs for each camera
     - keypoints_to_consider: List of keypoints selected for consideration
     - approx_time_maxspeed: List of approximate times of maximum speed for each camera
-    - delta_times_list: List of delta times for each camera
+    - time_RAM_list: List of time ranges to consider around max speed times for each camera
     '''
     
     # Step 1
@@ -1037,7 +1010,7 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
     selected_id_list = []
     approx_time_maxspeed = []
     keypoints_to_consider = selected_keypoints
-    delta_times_list = []
+    time_RAM_list = []
     
     try: # video files
         video_files_dict = {cam_name: file for cam_name in cam_names for file in vid_or_img_files if cam_name in os.path.basename(file)}
@@ -1051,7 +1024,7 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
         if not vid_or_img_files_cam:
             logging.warning(f'No video file nor image directory found for camera {cam_name}')
             selected_id_list.append(None)
-            delta_times_list.append(time_range_around_maxspeed)  # Use default value for missing cameras
+            time_RAM_list.append(time_range_around_maxspeed)  # Use default value for missing cameras
             continue
             
         try:
@@ -1068,7 +1041,7 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
         if frame_rgb is None:
             logging.warning(f'Cannot read frame {frame_number} from video {vid_or_img_files_cam}')
             selected_id_list.append(None)
-            delta_times_list.append(time_range_around_maxspeed)  # Use default value for missing cameras
+            time_RAM_list.append(time_range_around_maxspeed)  # Use default value for missing cameras
             if isinstance(cap, cv2.VideoCapture):
                 cap.release()
             continue
@@ -1084,11 +1057,11 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
         ui['containers']['bounding_boxes_list'] = bounding_boxes_list 
         ui['controls']['frame_slider'].on_changed(lambda val: update_frame(val, fps, ui, ui['cap'], frame_to_json, pose_dir, json_dirs_names, i, search_around_frames, bounding_boxes_list))
         
-        # Update central time textbox to also update slider
-        ui['controls']['central_time_textbox'].on_submit(lambda text: update_central_time(text, fps, search_around_frames, i, ui, ui['cap'], frame_to_json, pose_dir, json_dirs_names, ui['containers']['bounding_boxes_list']))
+        # Update main time textbox to also update slider
+        ui['controls']['main_time_textbox'].on_submit(lambda text: update_main_time(text, fps, search_around_frames, i, ui, ui['cap'], frame_to_json, pose_dir, json_dirs_names, ui['containers']['bounding_boxes_list']))
         
-        # Update delta time textbox to update highlight
-        ui['controls']['delta_time_textbox'].on_submit(lambda text: update_delta_time(text, fps, search_around_frames, i, ui))
+        # Update time_RAM textbox to update highlight
+        ui['controls']['time_RAM_textbox'].on_submit(lambda text: update_time_range_around_maxspeed(text, fps, search_around_frames, i, ui))
 
         # Add click event handler
         ui['fig'].canvas.mpl_connect('button_press_event', 
@@ -1104,7 +1077,7 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
         btn_ok.on_clicked(lambda event: handle_ok_button(ui, fps, i, selected_id_list, approx_time_maxspeed))
 
         # Keyboard navigation
-        ui['fig'].canvas.mpl_connect('key_press_event', lambda event: handle_key_press(event, ui['controls']['central_time_textbox'],
+        ui['fig'].canvas.mpl_connect('key_press_event', lambda event: handle_key_press(event, ui['controls']['main_time_textbox'],
                               search_around_frames, i, ui['cap'], ui['ax_video'], frame_to_json, pose_dir,
                               json_dirs_names[i], ui['containers']['rects'], ui['containers']['annotations'], bounding_boxes_list, ui['fig'],
                               time_range_around_maxspeed, fps, ui))
@@ -1115,13 +1088,13 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
 
         # Store selected values after OK button is clicked
         selected_id_list.append(selected_idx_container[0])
-        current_frame = int(round(float(ui['controls']['central_time_textbox'].text) * fps))
+        current_frame = int(round(float(ui['controls']['main_time_textbox'].text) * fps))
         approx_time_maxspeed.append(current_frame / fps)
-        current_delta_time = float(ui['controls']['delta_time_textbox'].text)
-        delta_times_list.append(current_delta_time)  # Store the delta time for this camera
-        logging.info(f'--> Camera #{i}: selected person #{selected_idx_container[0]} at time #{current_frame / fps:.2f}±{current_delta_time}')
+        current_time_RAM = float(ui['controls']['time_RAM_textbox'].text)
+        time_RAM_list.append(current_time_RAM)  # Store the time_RAM for this camera
+        logging.info(f'--> Camera #{i}: selected person #{selected_idx_container[0]} at time #{current_frame / fps:.2f}±{current_time_RAM:.2f}')
 
-    return selected_id_list, keypoints_to_consider, approx_time_maxspeed, delta_times_list
+    return selected_id_list, keypoints_to_consider, approx_time_maxspeed, time_RAM_list
 
 
 # SYNC FUNCTIONS
@@ -1485,12 +1458,12 @@ def synchronize_cams_all(config_dict):
     
     # Handle manual selection if synchronization_gui is True
     if synchronization_gui:
-        selected_id_list, keypoints_to_consider, approx_time_maxspeed, delta_times_list = select_person(
+        selected_id_list, keypoints_to_consider, approx_time_maxspeed, time_RAM_list = select_person(
             vid_or_img_files, cam_names, json_files_names_range, search_around_frames, 
             pose_dir, json_dirs_names, keypoints_names, time_range_around_maxspeed, fps)
         
-        # Calculate lag_ranges using delta_times_list
-        lag_ranges = [int(dt * fps) for dt in delta_times_list]
+        # Calculate lag_ranges using time_RAM_list
+        lag_ranges = [int(dt * fps) for dt in time_RAM_list]
         
         # Update search_around_frames if approx_time_maxspeed is a list
         if isinstance(approx_time_maxspeed, list):
