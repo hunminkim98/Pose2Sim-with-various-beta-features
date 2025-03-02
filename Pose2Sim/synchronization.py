@@ -49,7 +49,6 @@ from anytree import RenderTree
 from anytree.importer import DictImporter
 from matplotlib.widgets import TextBox, Button
 import logging
-from matplotlib.patches import Polygon
 
 from Pose2Sim.common import sort_stringlist_by_last_number, bounding_boxes
 from Pose2Sim.skeletons import *
@@ -67,13 +66,16 @@ __status__ = "Development"
 
 
 # UI FUNCTIONS
-
 # Global matplotlib settings - remove toolbar
 plt.rcParams['toolbar'] = 'none'
 
 def reset_styles(rect, annotation):
     '''
-    Resets the styles of a rectangle and its annotation to default.
+    Resets the visual style of a bounding box and its annotation to default.
+    
+    INPUTS:
+    - rect: Matplotlib Rectangle object representing a bounding box
+    - annotation: Matplotlib Text object containing the label for the bounding box
     '''
 
     rect.set_linewidth(1)
@@ -85,8 +87,18 @@ def reset_styles(rect, annotation):
 
 def create_textbox(ax_pos, label, initial, UI_PARAMS):
     '''
-    Helper function to create a textbox with consistent styling
+    Creates a textbox widget with consistent styling.
+    
+    INPUTS:
+    - ax_pos: List or tuple containing the position of the axes in the figure [left, bottom, width, height]
+    - label: String label for the textbox
+    - initial: Initial text value
+    - UI_PARAMS: Dictionary containing UI parameters with colors and sizes settings
+    
+    OUTPUTS:
+    - textbox: The created TextBox widget
     '''
+
     ax = plt.axes(ax_pos)
     ax.set_facecolor(UI_PARAMS['colors']['control'])
     textbox = TextBox(
@@ -107,6 +119,17 @@ def create_textbox(ax_pos, label, initial, UI_PARAMS):
 
 ## Handlers
 def handle_ok_button(ui, fps, i, selected_id_list, approx_time_maxspeed):
+    '''
+    Handles the OK button click event.
+    
+    INPUTS:
+    - ui: Dictionary containing all UI elements and state
+    - fps: Frames per second of the video
+    - i: Current camera index
+    - selected_id_list: List to store the selected person ID for each camera
+    - approx_time_maxspeed: List to store the approximate time of maximum speed for each camera
+    '''
+
     try:
         central_time = float(ui['controls']['central_time_textbox'].text)
         delta_time = float(ui['controls']['delta_time_textbox'].text)
@@ -119,8 +142,14 @@ def handle_ok_button(ui, fps, i, selected_id_list, approx_time_maxspeed):
 
 def handle_person_change(text, selected_idx_container, person_textbox):
     '''
-    Handle changes to the person selection text box.
+    Handles changes to the person selection text box.
+    
+    INPUTS:
+    - text: Text from the person selection text box
+    - selected_idx_container: List with one element to store the selected person's index
+    - person_textbox: TextBox widget for displaying and editing the selected person number
     '''
+
     try:
         selected_idx_container[0] = int(text)
     except ValueError:
@@ -132,8 +161,28 @@ def handle_frame_change(text, frame_number, frame_textbox, cap, ax_video, frame_
                         pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, 
                         fig, search_around_frames, i, time_range_around_maxspeed, fps, ui):
     '''
-    Handle changes to the frame number text box.
+    Handles changes to the frame number text box.
+    
+    INPUTS:
+    - text: Text from the frame number text box
+    - frame_number: The current frame number
+    - frame_textbox: TextBox widget for displaying and editing the frame number
+    - cap: Video capture object
+    - ax_video: Axes for video display
+    - frame_to_json: Mapping from frame numbers to JSON files
+    - pose_dir: Directory containing pose data
+    - json_dir_name: Name of the JSON directory for the current camera
+    - rects: List of rectangle patches representing bounding boxes
+    - annotations: List of text annotations for each bounding box
+    - bounding_boxes_list: List of bounding boxes for detected persons
+    - fig: The figure object to update
+    - search_around_frames: Frame ranges to search around for each camera
+    - i: Current camera index
+    - time_range_around_maxspeed: Time range to consider around max speed
+    - fps: Frames per second of the video
+    - ui: Dictionary containing all UI elements and state
     '''
+
     if search_around_frames[i][0] <= frame_number <= search_around_frames[i][1]:
         # Update video frame first
         update_play(cap, ax_video.images[0], frame_number, frame_to_json, 
@@ -155,6 +204,27 @@ def handle_frame_change(text, frame_number, frame_textbox, cap, ax_video, frame_
 def handle_prev_frame(frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
                       pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig,
                       time_range_around_maxspeed, fps, ui):
+    '''
+    Handles the previous frame button click event.
+    
+    INPUTS:
+    - frame_textbox: TextBox widget for displaying and editing the frame number
+    - search_around_frames: Frame ranges to search around for each camera
+    - i: Current camera index
+    - cap: Video capture object
+    - ax_video: Axes for video display
+    - frame_to_json: Mapping from frame numbers to JSON files
+    - pose_dir: Directory containing pose data
+    - json_dir_name: Name of the JSON directory for the current camera
+    - rects: List of rectangle patches representing bounding boxes
+    - annotations: List of text annotations for each bounding box
+    - bounding_boxes_list: List of bounding boxes for detected persons
+    - fig: The figure object to update
+    - time_range_around_maxspeed: Time range to consider around max speed
+    - fps: Frames per second of the video
+    - ui: Dictionary containing all UI elements and state
+    '''
+
     time_val = float(frame_textbox.text.split(' ±')[0])
     current = round(time_val * fps)
     if current > search_around_frames[i][0]:
@@ -167,6 +237,27 @@ def handle_prev_frame(frame_textbox, search_around_frames, i, cap, ax_video, fra
 def handle_next_frame(frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
                       pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig,
                       time_range_around_maxspeed, fps, ui):
+    '''
+    Handles the next frame button click event.
+    
+    INPUTS:
+    - frame_textbox: TextBox widget for displaying and editing the frame number
+    - search_around_frames: Frame ranges to search around for each camera
+    - i: Current camera index
+    - cap: Video capture object
+    - ax_video: Axes for video display
+    - frame_to_json: Mapping from frame numbers to JSON files
+    - pose_dir: Directory containing pose data
+    - json_dir_name: Name of the JSON directory for the current camera
+    - rects: List of rectangle patches representing bounding boxes
+    - annotations: List of text annotations for each bounding box
+    - bounding_boxes_list: List of bounding boxes for detected persons
+    - fig: The figure object to update
+    - time_range_around_maxspeed: Time range to consider around max speed
+    - fps: Frames per second of the video
+    - ui: Dictionary containing all UI elements and state
+    '''
+
     time_val = float(frame_textbox.text.split(' ±')[0])
     current = round(time_val * fps)
     if current < search_around_frames[i][1]:
@@ -179,6 +270,28 @@ def handle_next_frame(frame_textbox, search_around_frames, i, cap, ax_video, fra
 def handle_key_press(event, frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
                      pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig,
                      time_range_around_maxspeed, fps, ui):
+    '''
+    Handles keyboard navigation through video frames.
+    
+    INPUTS:
+    - event: Matplotlib keyboard event object
+    - frame_textbox: TextBox widget for displaying and editing the frame number
+    - search_around_frames: Frame ranges to search around for each camera
+    - i: Current camera index
+    - cap: Video capture object
+    - ax_video: Axes for video display
+    - frame_to_json: Mapping from frame numbers to JSON files
+    - pose_dir: Directory containing pose data
+    - json_dir_name: Name of the JSON directory for the current camera
+    - rects: List of rectangle patches representing bounding boxes
+    - annotations: List of text annotations for each bounding box
+    - bounding_boxes_list: List of bounding boxes for detected persons
+    - fig: The figure object to update
+    - time_range_around_maxspeed: Time range to consider around max speed
+    - fps: Frames per second of the video
+    - ui: Dictionary containing all UI elements and state
+    '''
+
     if event.key == 'left':
         handle_prev_frame(frame_textbox, search_around_frames, i, cap, ax_video, frame_to_json,
                           pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, fig,
@@ -192,7 +305,14 @@ def handle_key_press(event, frame_textbox, search_around_frames, i, cap, ax_vide
 def handle_toggle_labels(event, keypoint_texts, containers, btn_toggle):
     '''
     Handle toggle labels button click.
+    
+    INPUTS:
+    - event: Matplotlib event object
+    - keypoint_texts: List of text objects for keypoint labels
+    - containers: Dictionary of container objects
+    - btn_toggle: Button object for toggling label visibility
     '''
+
     containers['show_labels'][0] = not containers['show_labels'][0]  # Toggle visibility state
     for text in keypoint_texts:
         text.set_visible(containers['show_labels'][0])
@@ -204,7 +324,11 @@ def handle_toggle_labels(event, keypoint_texts, containers, btn_toggle):
 ## Highlighters
 def highlight_selected_box(rect, annotation):
     '''
-    Highlights a selected rectangle and its annotation with bold white style.
+    Highlights a selected rectangle and its annotation with bold orange style.
+    
+    INPUTS:
+    - rect: Matplotlib Rectangle object to highlight
+    - annotation: Matplotlib Text object to highlight
     '''
 
     rect.set_linewidth(2)
@@ -216,7 +340,11 @@ def highlight_selected_box(rect, annotation):
 
 def highlight_hover_box(rect, annotation):
     '''
-    Highlights a hovered rectangle and its annotation with yellow style.
+    Highlights a hovered rectangle and its annotation with yellow-orange style.
+    
+    INPUTS:
+    - rect: Matplotlib Rectangle object to apply hover effect to
+    - annotation: Matplotlib Text object to style for hover state
     '''
 
     rect.set_linewidth(2)
@@ -226,11 +354,18 @@ def highlight_hover_box(rect, annotation):
     annotation.set_fontweight('bold')
 
 
-## on_ family
+## on_family
 def on_hover(event, fig, rects, annotations, bounding_boxes_list, selected_idx_container=None):
     '''
-    Highlights the bounding box and annotation when the mouse hovers over a person in the plot.
-    Maintains highlight on the selected person.
+    Manages hover effects for bounding boxes in the video frame.
+    
+    INPUTS:
+    - event: Matplotlib event object containing mouse position
+    - fig: Matplotlib figure to update
+    - rects: List of rectangle patches representing bounding boxes
+    - annotations: List of text annotations for each bounding box
+    - bounding_boxes_list: List of bounding box coordinates (x_min, y_min, x_max, y_max)
+    - selected_idx_container: Optional container holding the index of the currently selected box
     '''
 
     if event.xdata is None or event.ydata is None:
@@ -257,17 +392,14 @@ def on_hover(event, fig, rects, annotations, bounding_boxes_list, selected_idx_c
 
 def on_click(event, ax, bounding_boxes_list, selected_idx_container, person_textbox):
     '''
-    Detects if a bounding box is clicked and records the index of the selected person.
-
+    Detects clicks on person bounding boxes and updates the selection state.
+    
     INPUTS:
-    - event: The click event.
-    - ax: The axes object of the plot.
-    - bounding_boxes_list: List of tuples containing bounding box coordinates.
-    - selected_idx_container: List with one element to store the selected person's index.
-    - person_textbox: TextBox. The person selection text box widget.
-
-    OUTPUTS:
-    - None. Updates selected_idx_container[0] and person_textbox with the index of the selected person.
+    - event: Matplotlib event object containing click information
+    - ax: The axes object of the video frame
+    - bounding_boxes_list: List of tuples containing bounding box coordinates (x_min, y_min, x_max, y_max)
+    - selected_idx_container: List with one element to store the selected person's index
+    - person_textbox: TextBox widget for displaying and editing the selected person number
     '''
 
     if event.inaxes != ax or event.xdata is None or event.ydata is None:
@@ -280,10 +412,99 @@ def on_click(event, ax, bounding_boxes_list, selected_idx_container, person_text
             break
 
 
+def on_slider_change(val, fps, controls, fig, search_around_frames, cam_index, ax_slider):
+    '''
+    Updates UI elements when the frame slider value changes.
+    
+    INPUTS:
+    - val: The current slider value (frame number)
+    - fps: Frames per second of the video
+    - controls: Dictionary containing UI control elements
+    - fig: Matplotlib figure to update
+    - search_around_frames: Frame ranges to search within
+    - cam_index: Current camera index
+    - ax_slider: The slider axes object
+    '''
+
+    frame_number = int(val)
+    central_time = frame_number / fps
+    controls['central_time_textbox'].set_val(f"{central_time:.2f}")
+    try:
+        delta_time = float(controls['delta_time_textbox'].text)
+    except ValueError:
+        delta_time = 0
+    update_highlight(frame_number, delta_time, fps, search_around_frames, cam_index, ax_slider, controls)
+    fig.canvas.draw_idle()
+
+
+def on_key(event, ui, fps, cap, frame_to_json, pose_dir, json_dirs_names, i, search_around_frames, bounding_boxes_list):
+    '''
+    Handles keyboard navigation through video frames.
+    
+    INPUTS:
+    - event: Matplotlib keyboard event object
+    - ui: Dictionary containing all UI elements and state
+    - fps: Frames per second of the video
+    - cap: Video capture object
+    - frame_to_json: Mapping of frame numbers to JSON files
+    - pose_dir: Directory containing pose data
+    - json_dirs_names: List of JSON directory names
+    - i: Current camera index
+    - search_around_frames: Frame ranges to search around for each camera
+    - bounding_boxes_list: List of bounding boxes for detected persons
+    '''
+
+    if event.key == 'left':
+        handle_prev_frame(ui['controls']['central_time_textbox'], search_around_frames, i, cap, ui['ax_video'], frame_to_json,
+                          pose_dir, json_dirs_names[i], ui['containers']['rects'], ui['containers']['annotations'], bounding_boxes_list, ui['fig'],
+                          float(ui['controls']['delta_time_textbox'].text), fps, ui)
+    elif event.key == 'right':
+        handle_next_frame(ui['controls']['central_time_textbox'], search_around_frames, i, cap, ui['ax_video'], frame_to_json,
+                          pose_dir, json_dirs_names[i], ui['containers']['rects'], ui['containers']['annotations'], bounding_boxes_list, ui['fig'],
+                          float(ui['controls']['delta_time_textbox'].text), fps, ui)
+
+
+## UI Update Functions
+def update_highlight(central_frame, delta_time, fps, search_around_frames, cam_index, ax_slider, controls):
+    '''
+    Updates the highlighted range on the frame slider.
+    
+    INPUTS:
+    - central_frame: The current frame number
+    - delta_time: Time range in seconds to highlight around the central frame
+    - fps: Frames per second of the video
+    - search_around_frames: Valid frame range limits for the current camera
+    - cam_index: Current camera index
+    - ax_slider: The slider axes object
+    - controls: Dictionary containing UI controls and state
+    '''
+
+    if 'range_highlight' in controls:
+        controls['range_highlight'].remove()
+    range_start = max(central_frame - delta_time * fps, search_around_frames[cam_index][0])
+    range_end = min(central_frame + delta_time * fps, search_around_frames[cam_index][1])
+    controls['range_highlight'] = ax_slider.axvspan(range_start, range_end, 
+                                                  ymin=0.20, ymax=0.80,
+                                                  color='darkorange', alpha=0.5, zorder=4)
+
+
 def update_central_time(text, fps, search_around_frames, i, ui, cap, frame_to_json, pose_dir, json_dirs_names, bounding_boxes_list):
     '''
-    Updates the central time slider and frame slider based on the input text.
+    Updates the UI based on changes to the central time textbox.
+    
+    INPUTS:
+    - text: Text from the central time textbox
+    - fps: Frames per second of the video
+    - search_around_frames: Valid frame range limits for each camera
+    - i: Current camera index
+    - ui: Dictionary containing all UI elements and state
+    - cap: Video capture object
+    - frame_to_json: Mapping of frame numbers to JSON files
+    - pose_dir: Directory containing pose data
+    - json_dirs_names: List of JSON directory names
+    - bounding_boxes_list: List of bounding boxes for detected persons
     '''
+
     try:
         central_time = float(text)
         frame_num = int(round(central_time * fps))
@@ -296,8 +517,16 @@ def update_central_time(text, fps, search_around_frames, i, ui, cap, frame_to_js
 
 def update_delta_time(text, fps, search_around_frames, i, ui): #TODO: Not delta time, should be replaced by a proper name
     '''
-    Updates the delta time slider and frame slider based on the input text.
+    Updates the highlight range based on changes to the delta time textbox.
+    
+    INPUTS:
+    - text: Text from the delta time textbox
+    - fps: Frames per second of the video
+    - search_around_frames: Valid frame range limits for each camera
+    - i: Current camera index
+    - ui: Dictionary containing UI elements and controls
     '''
+    
     try:
         delta_time = float(text)
         if delta_time < 0:
@@ -306,30 +535,6 @@ def update_delta_time(text, fps, search_around_frames, i, ui): #TODO: Not delta 
         update_highlight(frame_num, delta_time, fps, search_around_frames, i, ui['axes']['slider'], ui['controls'])
     except ValueError:
         pass
-        
-
-def update_highlight(central_frame, delta_time, fps, search_around_frames, cam_index, ax_slider, controls):
-    """Updates the highlight range of the slider."""
-    if 'range_highlight' in controls:
-        controls['range_highlight'].remove()
-    range_start = max(central_frame - delta_time * fps, search_around_frames[cam_index][0])
-    range_end = min(central_frame + delta_time * fps, search_around_frames[cam_index][1])
-    controls['range_highlight'] = ax_slider.axvspan(range_start, range_end, 
-                                                  ymin=0.20, ymax=0.80,
-                                                  color='darkorange', alpha=0.5, zorder=4)
-
-
-def on_slider_change(val, fps, controls, fig, search_around_frames, cam_index, ax_slider):
-    """Called when the slider value changes."""
-    frame_number = int(val)
-    central_time = frame_number / fps
-    controls['central_time_textbox'].set_val(f"{central_time:.2f}")
-    try:
-        delta_time = float(controls['delta_time_textbox'].text)
-    except ValueError:
-        delta_time = 0
-    update_highlight(frame_number, delta_time, fps, search_around_frames, cam_index, ax_slider, controls)
-    fig.canvas.draw_idle()
 
 
 def draw_bounding_boxes_and_annotations(ax, bounding_boxes_list, rects, annotations):
@@ -376,6 +581,21 @@ def update_keypoint_selection(selected_keypoints, all_keypoints, keypoints_names
                               SELECTED_COLOR, UNSELECTED_COLOR, NONE_COLOR):
     '''
     Updates the selected keypoints and their visualization on the scatter plot.
+    
+    INPUTS:
+    - selected_keypoints: List of keypoints that are currently selected
+    - all_keypoints: List of all available keypoints
+    - keypoints_names: List of valid keypoint names
+    - scatter: Scatter plot object to update
+    - keypoint_texts: List of text objects for keypoint labels
+    - selected_text: Text object displaying the currently selected keypoints
+    - btn_all_none: Button object for toggling between "Select All" and "Select None"
+    - SELECTED_COLOR: Color to use for selected keypoints
+    - UNSELECTED_COLOR: Color to use for unselected keypoints
+    - NONE_COLOR: Color to use for non-keypoint elements
+    
+    OUTPUTS:
+    - None. Updates the visualization in place.
     '''
     # Update scatter colors
     colors = [
@@ -402,8 +622,21 @@ def update_keypoint_selection(selected_keypoints, all_keypoints, keypoints_names
 
 def update_frame(val, fps, ui, cap, frame_to_json, pose_dir, json_dirs_names, i, search_around_frames, bounding_boxes_list):
     '''
-    Updates the frame number and central time in the UI dictionary.
+    Synchronizes all UI elements when the frame number changes.
+    
+    INPUTS:
+    - val: The current frame value from the slider
+    - fps: Frames per second of the video
+    - ui: Dictionary containing UI elements and controls
+    - cap: Video capture object
+    - frame_to_json: Mapping of frame numbers to JSON files
+    - pose_dir: Directory containing pose data
+    - json_dirs_names: List of JSON directory names
+    - i: Current camera index
+    - search_around_frames: Frame ranges to search around for each camera
+    - bounding_boxes_list: List of bounding boxes for detected persons
     '''
+
     frame_num = int(val)
     central_time = frame_num / fps
     ui['controls']['central_time_textbox'].set_val(f"{central_time:.2f}")
@@ -429,23 +662,20 @@ def update_frame(val, fps, ui, cap, frame_to_json, pose_dir, json_dirs_names, i,
 
 def update_play(cap, image, frame_number, frame_to_json, pose_dir, json_dir_name, rects, annotations, bounding_boxes_list, ax, fig):
     '''
-    Updates the plot with a new frame.
+    Updates the video frame and bounding boxes for the given frame number.
 
     INPUTS:
-    - cap: cv2.VideoCapture. The video capture object.
-    - image: The image object in the plot.
-    - frame_number: int. The frame number to display.
-    - frame_to_json: dict. Mapping from frame numbers to JSON file names.
-    - pose_dir: str. Path to the directory containing pose data.
-    - json_dir_name: str. Name of the JSON directory for the current camera.
-    - rects: List of rectangle patches representing bounding boxes.
-    - annotations: List of text annotations for each bounding box.
-    - bounding_boxes_list: List of tuples to store bounding boxes for the current frame.
-    - ax: The axes object of the plot.
-    - fig: The figure object containing the plot.
-
-    OUTPUTS:
-    - None. Updates the plot with the new frame, bounding boxes, and annotations.
+    - cap: Video capture object or list of image file paths
+    - image: The image object to update
+    - frame_number: The frame number to display
+    - frame_to_json: Mapping from frame numbers to JSON file names
+    - pose_dir: Directory containing pose data
+    - json_dir_name: Name of the JSON directory for the current camera
+    - rects: List of rectangle patches representing bounding boxes
+    - annotations: List of text annotations for each bounding box
+    - bounding_boxes_list: List to store bounding box coordinates
+    - ax: The axes object to draw on
+    - fig: The figure object to update
     '''
 
     # Store the currently selected box index if any
@@ -487,6 +717,19 @@ def update_play(cap, image, frame_number, frame_to_json, pose_dir, json_dir_name
 def select_keypoints(keypoints_names):
     '''
     Selects keypoints based on their names.
+
+    This function creates an interactive GUI for selecting keypoints. It displays
+    a human figure with selectable keypoints, allows users to toggle keypoint names,
+    select all or none, and confirm their selection. The GUI uses matplotlib for
+    visualization and interaction.
+
+    The function performs the following steps:
+    1. Sets up the figure and axes for the GUI
+    2. Defines keypoint positions and colors
+    3. Creates interactive elements (scatter plot, buttons, text)
+    4. Sets up event handlers for user interactions
+    5. Displays the GUI and waits for user input
+    6. Returns the list of selected keypoints
 
     INPUTS:
     - keypoints_names: List of strings. The names of the keypoints to select.
@@ -600,8 +843,24 @@ def select_keypoints(keypoints_names):
 
 def init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_around_frames, time_range_around_maxspeed, fps, cam_index, frame_to_json, pose_dir, json_dirs_names):
     '''
-    Step 2: Initialize UI for person and frame selection (excluding keypoint selection)
+    Initializes the UI for person and frame selection (Step 2 of the synchronization process).
+    
+    INPUTS:
+    - frame_rgb: The initial RGB frame to display
+    - cam_name: Name of the current camera
+    - frame_number: Initial frame number to display
+    - search_around_frames: Frame ranges to search around for each camera
+    - time_range_around_maxspeed: Time range to consider around max speed
+    - fps: Frames per second of the video
+    - cam_index: Index of the current camera
+    - frame_to_json: Mapping from frame numbers to JSON files
+    - pose_dir: Directory containing pose data
+    - json_dirs_names: Names of JSON directories for each camera
+    
+    OUTPUTS:
+    - ui: Dictionary containing all UI elements and state
     '''
+    
     # Define UI parameters
     BACKGROUND_COLOR = 'white'
     TEXT_COLOR = 'black'
@@ -747,10 +1006,28 @@ def init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_aro
 
 def select_person(vid_or_img_files, cam_names, json_files_names_range, search_around_frames, pose_dir, json_dirs_names, keypoints_names, time_range_around_maxspeed, fps):
     '''
-    Step 1: Select keypoints to consider for all cameras
-    Step 2: Select person ID and frame for each camera
+    This function manages the process of selecting keypoints and persons for each camera.
+    It performs two main steps:
+    1. Select keypoints to consider for all cameras
+    2. For each camera, select a person ID and a specific frame
+
+    INPUTS:
+    - vid_or_img_files: List of video files or image directories
+    - cam_names: List of camera names
+    - json_files_names_range: Range of JSON file names for each camera
+    - search_around_frames: Frame ranges to search around for each camera
+    - pose_dir: Directory containing pose data
+    - json_dirs_names: Names of JSON directories for each camera
+    - keypoints_names: Names of keypoints to consider
+    - time_range_around_maxspeed: Time range to consider around max speed
+    - fps: Frames per second of the videos
+
+    OUTPUTS:
+    - selected_id_list: List of selected person IDs for each camera
+    - keypoints_to_consider: List of keypoints selected for consideration
+    - approx_time_maxspeed: List of approximate times of maximum speed for each camera
+    - delta_times_list: List of delta times for each camera
     '''
-    logging.info('Manual mode: selecting keypoints and then person/frame for each camera.')
     
     # Step 1
     selected_keypoints = select_keypoints(keypoints_names)
