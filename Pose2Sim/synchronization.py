@@ -487,10 +487,10 @@ def update_main_time(text, fps, search_around_frames, i, ui, cap, frame_to_json,
         pass
 
 
-def update_time_range_around_maxspeed(text, fps, search_around_frames, i, ui):
+def update_time_RAM(text, fps, search_around_frames, i, ui):
     '''
+    time_RAM = time_range_around_maxspeed
     Updates the highlight range based on changes to the time_RAM textbox.
-    time_RAM means time_range_around_maxspeed
 
     INPUTS:
     - text: Text from the time_RAM textbox
@@ -687,9 +687,9 @@ def update_play(cap, image, frame_number, frame_to_json, pose_dir, json_dir_name
     fig.canvas.draw_idle()
 
 
-def select_keypoints(keypoints_names):
+def keypoints_ui(keypoints_names):
     '''
-    Selects keypoints based on their names.
+    Step 1: Initializes the UI for selecting keypoints.
 
     This function creates an interactive GUI for selecting keypoints. It displays
     a human figure with selectable keypoints, allows users to toggle keypoint names,
@@ -814,9 +814,9 @@ def select_keypoints(keypoints_names):
     return selected_keypoints
 
 
-def init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_around_frames, time_range_around_maxspeed, fps, cam_index, frame_to_json, pose_dir, json_dirs_names):
+def person_ui(frame_rgb, cam_name, frame_number, search_around_frames, time_range_around_maxspeed, fps, cam_index, frame_to_json, pose_dir, json_dirs_names):
     '''
-    Initializes the UI for person and frame selection (Step 2 of the synchronization process).
+    Step 2: Initializes the UI for person and frame selection.
     
     INPUTS:
     - frame_rgb: The initial RGB frame to display
@@ -972,7 +972,7 @@ def init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_aro
     # Connect event handlers using lambda
     frame_slider.on_changed(lambda val: on_slider_change(val, fps, controls, fig, search_around_frames, cam_index, ax_slider))
     controls['main_time_textbox'].on_submit(lambda text: update_main_time(text, fps, search_around_frames, cam_index, ui, ui['cap'], frame_to_json, pose_dir, json_dirs_names, containers['bounding_boxes_list']))
-    controls['time_RAM_textbox'].on_submit(lambda text: update_time_range_around_maxspeed(text, fps, search_around_frames, cam_index, ui))
+    controls['time_RAM_textbox'].on_submit(lambda text: update_time_RAM(text, fps, search_around_frames, cam_index, ui))
 
     return ui
 
@@ -1003,7 +1003,7 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
     '''
     
     # Step 1
-    selected_keypoints = select_keypoints(keypoints_names)
+    selected_keypoints = keypoints_ui(keypoints_names)
     logging.info(f'Selected keypoints for all cameras: {selected_keypoints}')
     
     # Step 2
@@ -1047,7 +1047,7 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
             continue
         
         # Initialize UI for person/frame selection only (no keypoint selection)
-        ui = init_person_selection_ui_step2(frame_rgb, cam_name, frame_number, search_around_frames, time_range_around_maxspeed, fps, i, frame_to_json, pose_dir, json_dirs_names)
+        ui = person_ui(frame_rgb, cam_name, frame_number, search_around_frames, time_range_around_maxspeed, fps, i, frame_to_json, pose_dir, json_dirs_names)
         ui['cap'] = cap
         
         # Draw initial bounding boxes
@@ -1061,7 +1061,7 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
         ui['controls']['main_time_textbox'].on_submit(lambda text: update_main_time(text, fps, search_around_frames, i, ui, ui['cap'], frame_to_json, pose_dir, json_dirs_names, ui['containers']['bounding_boxes_list']))
         
         # Update time_RAM textbox to update highlight
-        ui['controls']['time_RAM_textbox'].on_submit(lambda text: update_time_range_around_maxspeed(text, fps, search_around_frames, i, ui))
+        ui['controls']['time_RAM_textbox'].on_submit(lambda text: update_time_RAM(text, fps, search_around_frames, i, ui))
 
         # Add click event handler
         ui['fig'].canvas.mpl_connect('button_press_event', 
@@ -1477,14 +1477,6 @@ def synchronize_cams_all(config_dict):
                                      for (json_files_cam, frames_cam) in zip(json_files_names,search_around_frames)]
             json_files_range = [[os.path.join(pose_dir, j_dir, j_file) for j_file in json_files_names_range[j]] 
                                for j, j_dir in enumerate(json_dirs_names)]
-            
-            for cam, files in zip(cam_names, json_files_range):
-                logging.info(f"Camera {cam}: {len(files)} json files in range")
-                if files:
-                    logging.info(f"  First file: {os.path.basename(files[0])}")
-                    logging.info(f"  Last file: {os.path.basename(files[-1])}")
-                else:
-                    logging.warning(f"  No files found for camera {cam}")
                                
     else:
         selected_id_list = [None] * cam_nb
