@@ -48,6 +48,10 @@ from collections import Counter
 from anytree import RenderTree
 from anytree.importer import DictImporter
 import logging
+import matplotlib.pyplot as plt
+from matplotlib.widgets import Slider, Button, RangeSlider
+from scipy.spatial import ConvexHull
+from matplotlib.animation import FuncAnimation
 
 from Pose2Sim.common import retrieve_calib_params, computeP, weighted_triangulation, \
     reprojection, euclidean_distance, sort_people_sports2d, interpolate_zeros_nans, \
@@ -571,6 +575,86 @@ def extract_files_frame_f(json_tracked_files_f, keypoints_ids, nb_persons_to_det
     return x_files, y_files, likelihood_files
 
 
+def animate_pre_post_tracking(pre_tracking_data, post_tracking_data, folder_name=None, frame_step=10, interval=100):
+    """
+    Create an animation comparing pre-tracking and post-tracking data with convex hulls.
+    
+    Parameters:
+    -----------
+    pre_tracking_data : list
+        List of dictionaries containing pre-tracking detection data
+    post_tracking_data : numpy.ndarray
+        Array containing post-tracking keypoints
+    folder_name : str, optional
+        Name to display in the plot title
+    frame_step : int, optional
+        Number of frames to skip between animation steps
+    interval : int, optional
+        Animation speed in milliseconds
+    """
+    fig, (pre_ax, post_ax) = plt.subplots(1, 2, figsize=(15, 5))
+    
+    def update(frame):
+        pre_ax.clear()
+        post_ax.clear()
+        pre_ax.set_title(f'Pre-Tracking: {folder_name}')
+        pre_ax.set_xlim([0, 4000])
+        pre_ax.set_ylim([-3000, 0])
+        post_ax.set_title(f'Post-Tracking: {folder_name}')
+        post_ax.set_xlim([0, 4000])
+        post_ax.set_ylim([-3000, 0])
+
+        # Pre-tracking data
+        if frame < len(pre_tracking_data):
+            people = pre_tracking_data[frame]
+            hulls = []
+            for person in people:
+                x_data = person['pose_keypoints_2d'][0::3]
+                y_data = person['pose_keypoints_2d'][1::3]
+                valid_points = [(x, y) for x, y in zip(x_data, y_data) if x != 0 and y != 0 and not np.isnan(x) and not np.isnan(y)]
+                if len(valid_points) >= 3:
+                    try: # Add try-except block for robustness
+                        hull = ConvexHull(valid_points)
+                        hulls.append(hull)
+                        pre_ax.plot([p[0] for p in valid_points], [-p[1] for p in valid_points], 'o')
+                    except Exception as e:
+                        print(f"Warning: Could not compute Convex Hull for frame {frame}: {e}") # Add warning if hull fails
+            for hull in hulls:
+                for simplex in hull.simplices:
+                    pre_ax.plot(hull.points[simplex, 0], -hull.points[simplex, 1], 'k-')
+
+        # Post-tracking data
+        if frame < post_tracking_data.shape[0]:
+            x_data = post_tracking_data[frame, 0::3]
+            y_data = post_tracking_data[frame, 1::3]
+            # Filter out both (0,0) points AND NaNs
+            valid_points = [(x, y) for x, y in zip(x_data, y_data)
+                            if x != 0 and y != 0 and not np.isnan(x) and not np.isnan(y)]
+            if len(valid_points) >= 3:
+                try: # Add try-except block for robustness
+                    hull = ConvexHull(valid_points)
+                    post_ax.plot([p[0] for p in valid_points], [-p[1] for p in valid_points], 'bo')
+                    for simplex in hull.simplices:
+                        post_ax.plot(hull.points[simplex, 0], -hull.points[simplex, 1], 'k-')
+                except Exception as e:
+                    print(f"Warning: Could not compute Convex Hull for frame {frame}: {e}") # Add warning if hull fails
+
+    max_frames = max(len(pre_tracking_data), post_tracking_data.shape[0])
+    frames = list(range(0, max_frames, frame_step))
+    
+    ani = FuncAnimation(fig, update, frames=frames, interval=interval, repeat=False)
+    
+    plt.tight_layout()
+    plt.show(block=False)
+    
+    # Calculate total duration of the animation
+    total_duration = len(frames) * interval / 1000  # in seconds
+    
+    # Close the animation window after it's done
+    plt.pause(total_duration + 1)  # Animation time + 1 second
+    plt.close(fig)
+
+
 def triangulate_all(config_dict):
     '''
     For each frame
@@ -608,6 +692,15 @@ def triangulate_all(config_dict):
     show_interp_indices = config_dict.get('triangulation').get('show_interp_indices')
     undistort_points = config_dict.get('triangulation').get('undistort_points')
     make_c3d = config_dict.get('triangulation').get('make_c3d')
+    handle_LR_swap = config_dict.get('triangulation').get('handle_LR_swap')
+    undistort_points = config_dict.get('triangulation').get('undistort_points')
+    
+    # Custom setting for MAE tracking frame selection
+    MAE_tracking = config_dict.get('triangulation', {}).get('MAE_tracking', False)
+    # Add MAE tracking threshold from config, default to 100 if not specified
+    mae_threshold = config_dict.get('triangulation', {}).get('mae_tracking_threshold', 100) 
+    # Add Manual frame selection setting
+    Manual_frame = config_dict.get('triangulation', {}).get('Manual_frame', False) 
     
     try:
         calib_dir = [os.path.join(session_dir, c) for c in os.listdir(session_dir) if os.path.isdir(os.path.join(session_dir, c)) and  'calib' in c.lower()][0]
@@ -615,8 +708,9 @@ def triangulate_all(config_dict):
         raise Exception(f'No .toml calibration direcctory found.')
     try:
         calib_file = glob.glob(os.path.join(calib_dir, '*.toml'))[0] # lastly created calibration file
-    except:
-        raise Exception(f'No .toml calibration file found in the {calib_dir}.')
+        calib_data = toml.load(calib_file) # Load calibration data
+    except Exception as e:
+         raise Exception(f'Error loading calibration file {calib_file}: {e}')
     pose_dir = os.path.join(project_dir, 'pose')
     poseSync_dir = os.path.join(project_dir, 'pose-sync')
     poseTracked_dir = os.path.join(project_dir, 'pose-associated')
@@ -656,6 +750,22 @@ def triangulate_all(config_dict):
     keypoints_names_swapped = [keypoint_name_swapped.replace('right', 'left') if keypoint_name_swapped.startswith('right') else keypoint_name_swapped.replace('left', 'right') if keypoint_name_swapped.startswith('left') else keypoint_name_swapped for keypoint_name_swapped in keypoints_names_swapped]
     keypoints_idx_swapped = [keypoints_names.index(keypoint_name_swapped) for keypoint_name_swapped in keypoints_names_swapped] # find index of new keypoint_name
     
+    # Define pose directory before potentially changing it based on tracking results
+    if not os.path.exists(poseSync_dir):
+        pose_dir_source = pose_dir 
+    else:
+        pose_dir_source = poseSync_dir
+
+    calib_cam_keys = [k for k in calib_data.keys() if isinstance(calib_data[k], dict) and k not in ['metadata', 'capture_volume', 'charuco', 'checkerboard']] 
+    # Use cam_id_to_plot = 0 assuming first camera is representative
+    if 0 < len(calib_cam_keys):
+        camera_key = calib_cam_keys[0]
+        if 'size' in calib_data[camera_key] and len(calib_data[camera_key]['size']) == 2:
+            size = calib_data[camera_key]['size']
+            img_width = int(size[0])
+            img_height = int(size[1])
+            logging.info(f"Using resolution {img_width}x{img_height} from calibration file for camera '{camera_key}'.")
+
     # 2d-pose files selection
     try:
         pose_listdirs_names = next(os.walk(pose_dir))[1]
@@ -680,7 +790,485 @@ def triangulate_all(config_dict):
     json_files_names = [sort_stringlist_by_last_number(js) for js in json_files_names]    
 
     # frame range selection
-    f_range = [[0,min([len(j) for j in json_files_names])] if frame_range==[] else frame_range][0]
+    default_f_range = [0, min([len(j) for j in json_files_names])]
+    if frame_range == []:
+        f_range = default_f_range
+    else:
+        f_range = frame_range
+        
+    # Interactive frame range selection if Manual_frame is True
+    if Manual_frame:
+        logging.info(f"\nManual_frame enabled. Preparing interactive plot for frame range selection...")
+        
+        # --- Plotting Logic Start ---
+        # Load data for the first camera and first person for all frames
+        all_frames_data_x = []
+        all_frames_data_y = []
+        logging.info(f"Loading 2D data for plotting (Cam 0, Person 0)..."  )
+        person_id_to_plot = 0 # Assuming we plot the first person
+        cam_id_to_plot = 0 # Assuming we plot the first camera view
+        
+        # Load 2D keypoint data for plotting
+        for f_idx in tqdm(range(default_f_range[0], default_f_range[1]), desc="Loading frames for plot"): 
+            json_file_name_f = None
+            frame_x_data_all_people = [] # Store x data for all people in this frame
+            frame_y_data_all_people = [] # Store y data for all people in this frame
+            try:
+                # Find the json file for the current frame index f_idx for the specific camera
+                matching_files = [j for j in json_files_names[cam_id_to_plot] if int(re.split(r'(\d+)', j)[-2]) == f_idx]
+                if matching_files:
+                    json_file_name_f = matching_files[0]
+            except IndexError: # Handles cases where json_files_names[cam_id_to_plot] might be empty or index out of range
+                pass
+                
+            if json_file_name_f:
+                json_f_path = os.path.join(pose_dir, json_dirs_names[cam_id_to_plot], json_file_name_f)
+                try:
+                    with open(json_f_path, 'r') as f_json:
+                        js_data = json.load(f_json)
+                        num_people_in_frame = len(js_data.get('people', []))
+                    
+                    if num_people_in_frame > 0:
+                        # Extract data for all detected people in this frame for cam 0
+                        x_frame_all_people, y_frame_all_people, _ = extract_files_frame_f([json_f_path], keypoints_ids, num_people_in_frame)
+                        
+                        # Store data for each person
+                        for p_idx in range(num_people_in_frame):
+                            if x_frame_all_people.shape[0] > p_idx and x_frame_all_people.shape[1] > 0:
+                                frame_x_data_all_people.append(x_frame_all_people[p_idx][0])
+                                frame_y_data_all_people.append(y_frame_all_people[p_idx][0])
+                            else: # Handle potential inconsistencies
+                                frame_x_data_all_people.append([np.nan] * keypoints_nb)
+                                frame_y_data_all_people.append([np.nan] * keypoints_nb)
+                except FileNotFoundError:
+                     logging.debug(f"JSON file not found for frame {f_idx}: {json_f_path}")
+                     # Append empty lists if file not found to maintain frame count
+                except Exception as e:
+                    logging.warning(f"Error processing frame {f_idx} ({json_f_path}): {e}")
+                    # Append empty lists in case of other errors
+            # else: File name not found, append empty lists
+                
+            all_frames_data_x.append(frame_x_data_all_people)
+            all_frames_data_y.append(frame_y_data_all_people)
+
+        if not all_frames_data_x: # Check if any data was loaded
+             logging.warning("No 2D data loaded for plotting. Skipping interactive plot.")
+        else:
+            fig, ax = plt.subplots()
+            plt.subplots_adjust(left=0.1, bottom=0.25)
+            ax.set_title(f'Camera {cam_id_to_plot} - Frame 0')
+            ax.set_xlim(0, img_width)
+            ax.set_ylim(img_height, 0) # Invert Y axis for image coordinates
+            ax.set_aspect('equal', adjustable='box')
+            ax.grid(True)
+            
+            # Define color cycle based on matplotlib defaults
+            color_cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
+            
+            # Shared variable to store the selected range
+            # Initialize with the f_range determined earlier (either default or from config)
+            selected_f_range = list(f_range) 
+            
+            # Initial plot for the start of the initial range
+            initial_frame_idx = selected_f_range[0]
+            plot_lines = [] # Keep track of plot objects for people
+            initial_frame_x = all_frames_data_x[initial_frame_idx] if initial_frame_idx < len(all_frames_data_x) else []
+            initial_frame_y = all_frames_data_y[initial_frame_idx] if initial_frame_idx < len(all_frames_data_y) else []
+            for p_idx in range(len(initial_frame_x)):
+                 color = color_cycle[p_idx % len(color_cycle)]
+                 line, = ax.plot(initial_frame_x[p_idx], initial_frame_y[p_idx], 'o', markersize=5, color=color)
+                 plot_lines.append(line)
+            ax.set_title(f'Camera {cam_id_to_plot} - Frame {initial_frame_idx} ({len(initial_frame_x)} people)')
+            
+            # RangeSlider
+            plt.subplots_adjust(left=0.1, bottom=0.30) # Adjust bottom to make space for widgets
+            ax_rangeslider = plt.axes([0.1, 0.15, 0.8, 0.03]) # Position for RangeSlider
+            range_slider = RangeSlider(
+                ax=ax_rangeslider,
+                label='Frame Range',
+                valmin=default_f_range[0],
+                valmax=default_f_range[1] - 1,
+                valinit=(selected_f_range[0], selected_f_range[1]-1), # Use initial f_range, adjust end for inclusive display
+                valstep=1
+            )
+
+            # Button
+            ax_button = plt.axes([0.8, 0.05, 0.15, 0.04]) # Position for Button
+            confirm_button = Button(ax_button, 'Confirm Range')
+
+            def update_plot(frame_index):
+                # Get data for the specified frame index
+                current_frame_x = all_frames_data_x[frame_index] if frame_index < len(all_frames_data_x) else []
+                current_frame_y = all_frames_data_y[frame_index] if frame_index < len(all_frames_data_y) else []
+                
+                # Remove previous people plots
+                for line in plot_lines:
+                    try:
+                        line.remove()
+                    except ValueError: # Handle cases where line might already be removed
+                        pass 
+                plot_lines.clear()
+                
+                # Plot all people for the current frame
+                for p_idx in range(len(current_frame_x)):
+                    color = color_cycle[p_idx % len(color_cycle)]
+                    line, = ax.plot(current_frame_x[p_idx], current_frame_y[p_idx], 'o', markersize=5, color=color)
+                    plot_lines.append(line)
+                
+                ax.set_title(f'Camera {cam_id_to_plot} - Frame {frame_index} ({len(current_frame_x)} people detected)')
+                fig.canvas.draw_idle()
+
+            def range_slider_update(val):
+                # Update the plot to show the start frame of the selected range
+                start_frame_display = int(val[0])
+                update_plot(start_frame_display)
+                # Update the shared variable in real-time (optional, button confirms final)
+                # selected_f_range[0] = int(val[0])
+                # selected_f_range[1] = int(val[1]) + 1 # Adjust end frame back to exclusive
+
+            def confirm_action(event):
+                # Get the final range from the slider when button is clicked
+                final_range = range_slider.val
+                selected_f_range[0] = int(final_range[0])
+                selected_f_range[1] = int(final_range[1]) + 1 # Adjust end frame to be exclusive for range function
+                logging.info(f"Range selected: [{selected_f_range[0]} - {selected_f_range[1]-1}]")
+                plt.close(fig) # Close the plot window
+
+            range_slider.on_changed(range_slider_update)
+            confirm_button.on_clicked(confirm_action)
+
+            logging.info("Displaying interactive plot. Adjust the range slider and click 'Confirm Range'...")
+            plt.show() # Blocks execution until plt.close(fig) is called by the button
+            
+            # Use the range selected via the plot
+            f_range = selected_f_range
+            logging.info(f"Using selected frame range: [{f_range[0]} - {f_range[1]-1}]")
+            
+        # --- Plotting Logic End ---
+        
+    # --- MAE Based Person Tracking Start (only if MAE_tracking is True) ---
+    if MAE_tracking:
+        logging.info(f"\nStarting MAE based person tracking for each camera within range [{f_range[0]} - {f_range[1]-1}]...")
+        
+        # Define path for temporary tracked files
+        pose_tracked_selected_dir = os.path.join(project_dir, 'pose-tracked-selected')
+        if not os.path.exists(pose_tracked_selected_dir):
+            os.makedirs(pose_tracked_selected_dir)
+            
+        tracked_data_available = True # Flag to track if tracking was successful for all cams
+        
+        # Store pre-tracking data for visualization
+        pre_tracking_data_by_cam = {}
+        post_tracking_data_by_cam = {}
+
+        for cam_id, cam_dir_name in enumerate(json_dirs_names):
+            logging.info(f"\nProcessing camera: {cam_dir_name}")
+            cam_folder_path = os.path.join(pose_dir_source, cam_dir_name) # Use original pose_dir
+            
+            # Create subdirectory in the tracked directory
+            save_folder_cam = os.path.join(pose_tracked_selected_dir, cam_dir_name)
+            if not os.path.exists(save_folder_cam):
+                os.makedirs(save_folder_cam)
+                
+            # Collect pre-tracking data for this camera (for visualization)
+            pre_tracking_data_cam = []
+            for f_idx in range(f_range[0], f_range[1]):
+                frame_files = [j for j in json_files_names[cam_id] if int(re.split(r'(\d+)', j)[-2]) == f_idx]
+                people_in_frame = []
+                if frame_files:
+                    frame_json_path = os.path.join(cam_folder_path, frame_files[0])
+                    try:
+                        with open(frame_json_path, 'r') as f_json:
+                            js_data = json.load(f_json)
+                            people_in_frame = js_data.get('people', [])
+                    except Exception as e:
+                        logging.debug(f"Error reading frame {f_idx} for pre-tracking data: {e}")
+                pre_tracking_data_cam.append(people_in_frame)
+            
+            pre_tracking_data_by_cam[cam_dir_name] = pre_tracking_data_cam
+
+            # 1. Load data for the first frame in the range for this camera
+            first_frame_idx = f_range[0]
+            first_frame_files = [j for j in json_files_names[cam_id] if int(re.split(r'(\d+)', j)[-2]) == first_frame_idx]
+            
+            people_in_first_frame = []
+            first_frame_json_path = None
+            if first_frame_files:
+                first_frame_json_path = os.path.join(cam_folder_path, first_frame_files[0])
+                try:
+                    with open(first_frame_json_path, 'r') as f_json:
+                        js_data = json.load(f_json)
+                        people_in_first_frame = js_data.get('people', [])
+                except FileNotFoundError:
+                    logging.warning(f"JSON file not found for first frame {first_frame_idx} in camera {cam_dir_name}. Skipping tracking for this camera.")
+                    tracked_data_available = False
+                    continue
+                except Exception as e:
+                    logging.warning(f"Error reading first frame {first_frame_idx} JSON for camera {cam_dir_name}: {e}. Skipping tracking for this camera.")
+                    tracked_data_available = False
+                    continue
+
+            if not people_in_first_frame:
+                logging.warning(f"No people detected in the first frame {first_frame_idx} for camera {cam_dir_name}. Skipping tracking for this camera.")
+                tracked_data_available = False
+                continue
+
+            # 2. Manual Person Selection using adapted select_person_manually logic
+            logging.info(f"Please select the person to track for camera {cam_dir_name} (Frame {first_frame_idx}).")
+            fig_select, ax_select = plt.subplots()
+            person_patches_select = []
+            keypoint_count_cam = len(people_in_first_frame[0]['pose_keypoints_2d']) # Get keypoint count from first person
+
+            for i, person in enumerate(people_in_first_frame):
+                keypoints = np.array(person['pose_keypoints_2d']).reshape(-1, 3)
+                x_data = keypoints[:, 0]
+                y_data = keypoints[:, 1]
+                valid = (x_data != 0) & (y_data != 0) & ~np.isnan(x_data) & ~np.isnan(y_data) # Added isnan check
+                x_data_valid = x_data[valid]
+                y_data_valid = y_data[valid]
+                valid_points = np.column_stack((x_data_valid, y_data_valid)) # Combine valid points
+
+                # Plot points
+                scat = ax_select.scatter(x_data_valid, -y_data_valid, label=f'Person {i+1}')
+                # Add label near the center of the points
+                if len(x_data_valid) > 0:
+                     ax_select.annotate(f'{i+1}', xy=(np.mean(x_data_valid), -np.mean(y_data_valid)), color='red', fontsize=12, ha='center', va='center')
+
+                # Calculate and plot Convex Hull if enough valid points
+                if len(valid_points) >= 3:
+                    try:
+                        hull = ConvexHull(valid_points)
+                        # Plot Convex Hull
+                        for simplex in hull.simplices:
+                            ax_select.plot(hull.points[simplex, 0], -hull.points[simplex, 1], 'k-')
+                    except Exception as e:
+                        logging.warning(f"Could not compute Convex Hull for person {i+1} in camera {cam_dir_name}, frame {first_frame_idx}: {e}")
+
+                # Store for click detection (using original valid points before hull)
+                person_patches_select.append({'scatter': scat, 'index': i, 'points': valid_points})
+
+            # Use image dimensions from calibration if available, else default
+            img_width_select, img_height_select = img_width, img_height # Use dimensions fetched earlier
+            ax_select.set_title(f'Click on the person to track in Camera {cam_dir_name} (Frame {first_frame_idx})')
+            ax_select.set_xlim([0, img_width_select])
+            ax_select.set_ylim([-img_height_select, 0]) # Invert Y
+            ax_select.grid(True)
+            ax_select.legend()
+
+            selected_person_idx_cam = [-1] # Use list to allow modification within onclick
+
+            def onclick_select(event):
+                if event.inaxes == ax_select:
+                    x_click = event.xdata
+                    y_click = -event.ydata # De-invert Y for calculation
+                    min_dist = float('inf')
+                    clicked_idx = -1
+                    for patch_info in person_patches_select:
+                        points = patch_info['points']
+                        if len(points) > 0:
+                           distances = np.sqrt((points[:, 0] - x_click)**2 + (points[:, 1] - y_click)**2)
+                           dist = np.min(distances)
+                           if dist < min_dist:
+                                min_dist = dist
+                                clicked_idx = patch_info['index']
+                    if clicked_idx != -1:
+                        selected_person_idx_cam[0] = clicked_idx
+                        logging.info(f"Selected Person {clicked_idx + 1} for camera {cam_dir_name}.")
+                        plt.close(fig_select)
+                    else:
+                         logging.info("No person close enough to click detected. Try clicking closer.")
+
+            cid_select = fig_select.canvas.mpl_connect('button_press_event', onclick_select)
+            plt.show() # Wait for user click
+
+            if selected_person_idx_cam[0] == -1:
+                logging.warning(f"No person selected for camera {cam_dir_name}. Skipping tracking for this camera.")
+                # Decide how to handle this - skip camera, use default, raise error? Skipping for now.
+                tracked_data_available = False
+                continue 
+
+            # 3. Track the selected person using MAE
+            tracked_person_data_cam = {} # Store tracked data {frame_idx: keypoints_list}
+            
+            # Initial keypoints of the selected person
+            data_to_track_cam = np.array(people_in_first_frame[selected_person_idx_cam[0]]['pose_keypoints_2d'])
+            tracked_person_data_cam[first_frame_idx] = data_to_track_cam.tolist()
+
+            logging.info(f"Tracking Person {selected_person_idx_cam[0]+1} from frame {f_range[0]+1} to {f_range[1]-1} for camera {cam_dir_name}...")
+            total_min_avg_cam = 0
+            count_min_avg_cam = 0
+
+            for f_idx in tqdm(range(f_range[0] + 1, f_range[1]), desc=f"Tracking Cam {cam_id}", ncols=100, leave=False):
+                current_frame_files = [j for j in json_files_names[cam_id] if int(re.split(r'(\d+)', j)[-2]) == f_idx]
+                current_pos_cam = np.zeros(keypoint_count_cam) # Default to zeros if lost or no file
+
+                tracking_lost = True
+                best_match = -1
+
+                if current_frame_files:
+                    current_json_path = os.path.join(cam_folder_path, current_frame_files[0])
+                    try:
+                        with open(current_json_path, 'r') as f_json:
+                           js_data_f = json.load(f_json)
+                           people_in_frame_f = js_data_f.get('people', [])
+                           
+                           if people_in_frame_f:
+                               mae_cam = []
+                               for k, person_f in enumerate(people_in_frame_f):
+                                   p1 = np.array(person_f['pose_keypoints_2d'])
+                                   if len(p1) < keypoint_count_cam:
+                                       p1 = np.pad(p1, (0, keypoint_count_cam - len(p1)), 'constant')
+                                   elif len(p1) > keypoint_count_cam:
+                                        p1 = p1[:keypoint_count_cam] 
+                                        
+                                   x0, y0 = np.array(data_to_track_cam[::3]), np.array(data_to_track_cam[1::3])
+                                   x1, y1 = p1[::3], p1[1::3]
+                                   
+                                   min_len = min(len(x0), len(x1))
+                                   x0, y0 = x0[:min_len], y0[:min_len]
+                                   x1, y1 = x1[:min_len], y1[:min_len]
+
+                                   valid = np.where((x0 != 0) & (y0 != 0) & (x1 != 0) & (y1 != 0))[0]
+                                   
+                                   if valid.size == 0:
+                                       mae_val = float('inf')
+                                   else:
+                                       x_mae = np.mean(np.abs(x0[valid] - x1[valid]))
+                                       y_mae = np.mean(np.abs(y0[valid] - y1[valid]))
+                                       mae_val = np.mean([x_mae, y_mae])
+                                   
+                                   mae_cam.append(mae_val) # List of MAEs for this frame
+                                   
+                               # Filter out NaNs and Infs before finding the minimum
+                               valid_mae_candidates = [(val, idx) for idx, val in enumerate(mae_cam) if not np.isnan(val) and val != float('inf')]
+
+                               if valid_mae_candidates: # Check if there are any valid candidates
+                                   min_avg_cam, I1_cam = min(valid_mae_candidates)
+                                   best_match = I1_cam # Index of the best valid candidate
+
+                                   # Compare minimum valid MAE to threshold
+                                   if min_avg_cam <= mae_threshold:
+                                       # Track using the best valid candidate (I1_cam)
+                                       current_pos_cam = np.array(people_in_frame_f[I1_cam]['pose_keypoints_2d'])
+                                       if len(current_pos_cam) < keypoint_count_cam:
+                                            current_pos_cam = np.pad(current_pos_cam, (0, keypoint_count_cam - len(current_pos_cam)), 'constant')
+                                       elif len(current_pos_cam) > keypoint_count_cam:
+                                            current_pos_cam = current_pos_cam[:keypoint_count_cam]
+                                       data_to_track_cam = current_pos_cam # Update tracker
+                                       total_min_avg_cam += min_avg_cam
+                                       count_min_avg_cam += 1
+                                       tracking_lost = False
+                                   else: # Best valid MAE is still too high
+                                       logging.debug(f"Frame {f_idx}: Tracking lost in camera {cam_dir_name}. Best valid MAE {min_avg_cam:.2f} > threshold {mae_threshold}.")
+                                       tracking_lost = True # Ensure tracking_lost is set
+                                       
+                               else: # No valid candidates found (all were NaN/Inf)
+                                   min_avg_cam = float('inf') # Set MAE to infinity if no valid candidates
+                                   best_match = -1
+                                   logging.debug(f"Frame {f_idx}: Tracking lost in camera {cam_dir_name}. No valid MAE candidates found.")
+                                   tracking_lost = True # Ensure tracking_lost is set
+                                   
+                           else:
+                               # No people detected in frame
+                               logging.debug(f"Frame {f_idx}: No people detected in camera {cam_dir_name}.")
+                               tracking_lost = True # Set lost if no people
+                    except FileNotFoundError:
+                         logging.debug(f"JSON file not found for frame {f_idx} in camera {cam_dir_name}.")
+                         tracking_lost = True # Set lost if no file
+                    except Exception as e:
+                         logging.warning(f"Error processing frame {f_idx} for camera {cam_dir_name}: {e}")
+                         tracking_lost = True # Set lost on error
+                else:
+                    # No file found for this frame
+                    logging.debug(f"Frame {f_idx}: No file found for camera {cam_dir_name}.")
+                    tracking_lost = True # Set lost if no file
+
+                tracked_person_data_cam[f_idx] = current_pos_cam.tolist()
+
+            avg_min_avg_cam = total_min_avg_cam / count_min_avg_cam if count_min_avg_cam > 0 else float('inf')
+            logging.info(f"Tracking complete for camera {cam_dir_name}. Average MAE (when tracked): {avg_min_avg_cam:.2f}")
+            
+            # 4. Save tracked data for this camera
+            logging.info(f"Saving tracked data for camera {cam_dir_name} to {save_folder_cam}...")
+            for f_idx in range(f_range[0], f_range[1]):
+                 frame_json_file_name = None
+                 # Find the original filename for this frame index to maintain naming convention
+                 matching_files = [j for j in json_files_names[cam_id] if int(re.split(r'(\d+)', j)[-2]) == f_idx]
+                 if matching_files:
+                     frame_json_file_name = matching_files[0]
+                 else:
+                     # If original file didn't exist, create a name (e.g., using a template)
+                     # This assumes a consistent naming like 'frame_xxxxx.json'
+                     # Find example filename to deduce pattern
+                     example_name = json_files_names[cam_id][0] if json_files_names[cam_id] else "output_000000000000.json"
+                     name_parts = re.split(r'(\d+)', example_name)
+                     frame_num_str = str(f_idx).zfill(len(name_parts[-2])) # Pad with zeros
+                     frame_json_file_name = f"{name_parts[0]}{frame_num_str}{name_parts[-1]}"
+                     logging.debug(f"Original file for frame {f_idx} not found, creating filename: {frame_json_file_name}")
+
+                 frame_data_to_save = tracked_person_data_cam.get(f_idx, np.zeros(keypoint_count_cam).tolist()) # Use zeros if frame wasn't tracked
+
+                 frame_output_data = {
+                    "version": 1.3,
+                    "people": [{
+                        "person_id": [selected_person_idx_cam[0]], # Save selected index
+                        "pose_keypoints_2d": frame_data_to_save,
+                        "face_keypoints_2d": [],
+                        "hand_left_keypoints_2d": [],
+                        "hand_right_keypoints_2d": [],
+                        "pose_keypoints_3d": [],
+                        "face_keypoints_3d": [],
+                        "hand_left_keypoints_3d": [],
+                        "hand_right_keypoints_3d": []
+                    }]
+                 }
+                 save_path = os.path.join(save_folder_cam, frame_json_file_name)
+                 try:
+                     with open(save_path, 'w') as f_out:
+                         json.dump(frame_output_data, f_out)
+                 except Exception as e:
+                     logging.error(f"Failed to save tracked data for frame {f_idx}, camera {cam_dir_name}: {e}")
+                     tracked_data_available = False # Mark as failure if saving fails
+            
+            # Store the tracked data for post-tracking animation
+            post_tracking_data_cam = np.zeros((f_range[1] - f_range[0], keypoint_count_cam))
+            for f_rel_idx, f_idx in enumerate(range(f_range[0], f_range[1])):
+                if f_idx in tracked_person_data_cam:
+                    post_tracking_data_cam[f_rel_idx] = tracked_person_data_cam[f_idx]
+            
+            post_tracking_data_by_cam[cam_dir_name] = post_tracking_data_cam
+
+        # Visualize tracking results with animation for each camera
+        if tracked_data_available:
+            visualize_tracking = config_dict.get('triangulation', {}).get('visualize_tracking', True)
+            if visualize_tracking:
+                logging.info(f"\nVisualizing tracking results with animation...")
+                for cam_dir_name in json_dirs_names:
+                    logging.info(f"Animating tracking results for camera {cam_dir_name}...")
+                    try:
+                        animate_pre_post_tracking(
+                            pre_tracking_data_by_cam[cam_dir_name],
+                            post_tracking_data_by_cam[cam_dir_name],
+                            folder_name=cam_dir_name,
+                            frame_step=config_dict.get('triangulation', {}).get('animation_frame_step', 10),
+                            interval=config_dict.get('triangulation', {}).get('animation_interval', 100)
+                        )
+                    except Exception as e:
+                        logging.error(f"Failed to create animation for {cam_dir_name}: {e}")
+                        
+        # After looping through all cameras:
+        if tracked_data_available:
+             logging.info(f"\nMAE Based Person Tracking completed for all cameras. Using tracked data from '{pose_tracked_selected_dir}' for triangulation.")
+             pose_dir = pose_tracked_selected_dir # IMPORTANT: Update pose_dir to use the tracked files
+             # Update json_files_names to reflect the content of the new directory
+             json_files_names = [fnmatch.filter(os.listdir(os.path.join(pose_dir, js_dir)), '*.json') for js_dir in json_dirs_names]
+             json_files_names = [sort_stringlist_by_last_number(js) for js in json_files_names]
+        else:
+             logging.warning("\nMAE Based Person Tracking failed for one or more cameras. Proceeding with original data for triangulation.")
+             # pose_dir remains the original source directory
+
+        # --- MAE Based Person Tracking End ---
+
     frame_nb = f_range[1] - f_range[0]
     
     # Check that camera number is consistent between calibration file and pose folders
@@ -689,8 +1277,13 @@ def triangulate_all(config_dict):
     
     # Triangulation
     if multi_person:
-        nb_persons_to_detect = max(max(count_persons_in_json(os.path.join(pose_dir, json_dirs_names[c], json_fname)) for json_fname in json_files_names[c]) for c in range(n_cams))
-    else:
+        # If tracking was successful, there should only be one person per file
+        if tracked_data_available and MAE_tracking:
+             nb_persons_to_detect = 1
+             logging.info("Using tracked data: processing as single person.")
+        else: # Fallback or original multi-person logic
+            nb_persons_to_detect = max(max(count_persons_in_json(os.path.join(pose_dir, json_dirs_names[c], json_fname)) for json_fname in json_files_names[c]) for c in range(n_cams))
+    else: # single_person specified in config
         nb_persons_to_detect = 1
 
     Q = [[[np.nan]*3]*keypoints_nb for n in range(nb_persons_to_detect)]
@@ -750,10 +1343,11 @@ def triangulate_all(config_dict):
                 nb_cams_excluded[n].append(nb_cams_excluded_kpt)
                 id_excluded_cams[n].append(id_excluded_cams_kpt)
         
-        if multi_person:
+        # Re-identification only needed if not using tracked data or if tracking failed
+        if multi_person and (not MAE_tracking or not tracked_data_available): 
             # reID persons across frames by checking the distance from one frame to another
             # print('Q before ordering ', np.array(Q)[:,:2])
-            if f !=0:
+            if f != f_range[0]: # Start check from the second frame in the range
                 Q, associated_tuples = sort_people_sports2d(Q_old, Q)
                 # Q, personsIDs_sorted, associated_tuples = sort_people(Q_old, Q)
                 # print('Q after ordering ', personsIDs_sorted, associated_tuples, np.array(Q)[:,:2])
@@ -768,9 +1362,20 @@ def triangulate_all(config_dict):
                         id_excluded_cams_sorted += [id_excluded_cams[id_in_old[0]]]
                     else:
                         # personsIDs_sorted += [-1]
-                        error_sorted += [error[i]]
-                        nb_cams_excluded_sorted += [nb_cams_excluded[i]]
-                        id_excluded_cams_sorted += [id_excluded_cams[i]]
+                        # Keep original if no match found (might be a new person)
+                        # Need to find an available original index 'j' not already mapped from id_in_old
+                        original_indices_used = associated_tuples[:,1]
+                        available_original_indices = [idx for idx in range(len(error)) if idx not in original_indices_used]
+                        if available_original_indices:
+                           original_idx_to_use = available_original_indices[0] # Take the first available
+                           error_sorted += [error[original_idx_to_use]]
+                           nb_cams_excluded_sorted += [nb_cams_excluded[original_idx_to_use]]
+                           id_excluded_cams_sorted += [id_excluded_cams[original_idx_to_use]]
+                        else: # Should not happen if len(Q) matches len(error)
+                            # Fallback: use placeholder Nans or zeros? Or original index 'i'? Let's use 'i' but this indicates a potential issue.
+                           error_sorted += [error[i]]
+                           nb_cams_excluded_sorted += [nb_cams_excluded[i]]
+                           id_excluded_cams_sorted += [id_excluded_cams[i]]
                 error, nb_cams_excluded, id_excluded_cams = error_sorted, nb_cams_excluded_sorted, id_excluded_cams_sorted
         
         # TODO: if distance > threshold, new person
@@ -783,16 +1388,31 @@ def triangulate_all(config_dict):
         id_excluded_cams_tot.append(id_excluded_cams)
             
     # fill values for if a person that was not initially detected has entered the frame 
+    # Adjusted fillvalue logic needed if nb_persons_to_detect changed due to tracking
     Q_tot = [list(tpl) for tpl in zip(*it.zip_longest(*Q_tot, fillvalue=[np.nan]*keypoints_nb*3))]
     error_tot = [list(tpl) for tpl in zip(*it.zip_longest(*error_tot, fillvalue=[np.nan]*keypoints_nb*3))]
     nb_cams_excluded_tot = [list(tpl) for tpl in zip(*it.zip_longest(*nb_cams_excluded_tot, fillvalue=[np.nan]*keypoints_nb*3))]
-    id_excluded_cams_tot = [list(tpl) for tpl in zip(*it.zip_longest(*id_excluded_cams_tot, fillvalue=[np.nan]*keypoints_nb*3))]
+    # Check if id_excluded_cams_tot needs similar fill value (it's a list of lists of lists)
+    # Example fill value assuming it needs to match keypoint structure
+    id_excluded_cams_fill = [[np.nan]*n_cams]*keypoints_nb 
+    id_excluded_cams_tot = [list(tpl) for tpl in zip(*it.zip_longest(*id_excluded_cams_tot, fillvalue=[id_excluded_cams_fill]))]
+
 
     # dataframes for each person
     Q_tot = [pd.DataFrame([Q_tot_f[n] for Q_tot_f in Q_tot]) for n in range(nb_persons_to_detect)]
     error_tot = [pd.DataFrame([error_tot_f[n] for error_tot_f in error_tot]) for n in range(nb_persons_to_detect)]
     nb_cams_excluded_tot = [pd.DataFrame([nb_cams_excluded_tot_f[n] for nb_cams_excluded_tot_f in nb_cams_excluded_tot]) for n in range(nb_persons_to_detect)]
-    id_excluded_cams_tot = [pd.DataFrame([id_excluded_cams_tot_f[n] for id_excluded_cams_tot_f in id_excluded_cams_tot]) for n in range(nb_persons_to_detect)]
+    # Corrected processing for id_excluded_cams_tot which is nested differently
+    id_excluded_cams_processed = [[] for _ in range(nb_persons_to_detect)]
+    for frame_data in id_excluded_cams_tot:
+        for person_id in range(nb_persons_to_detect):
+            if person_id < len(frame_data):
+                id_excluded_cams_processed[person_id].append(frame_data[person_id])
+            else: # Append fill value if person data missing for this frame (shouldn't happen with zip_longest?)
+                 id_excluded_cams_processed[person_id].append(id_excluded_cams_fill) 
+
+    id_excluded_cams_tot_df = [pd.DataFrame(id_excluded_cams_processed[n]) for n in range(nb_persons_to_detect)]
+    
     
     for n in range(nb_persons_to_detect):
         error_tot[n]['mean'] = error_tot[n].mean(axis = 1)
@@ -808,17 +1428,32 @@ def triangulate_all(config_dict):
     Q_tot = [Q_tot[n] for n in range(len(Q_tot)) if n not in deleted_person_id]
     error_tot = [error_tot[n] for n in range(len(error_tot)) if n not in deleted_person_id]
     nb_cams_excluded_tot = [nb_cams_excluded_tot[n] for n in range(len(nb_cams_excluded_tot)) if n not in deleted_person_id]
-    id_excluded_cams_tot = [id_excluded_cams_tot[n] for n in range(len(id_excluded_cams_tot)) if n not in deleted_person_id]
+    id_excluded_cams_tot_df = [id_excluded_cams_tot_df[n] for n in range(len(id_excluded_cams_tot_df)) if n not in deleted_person_id]
     nb_persons_to_detect = len(Q_tot)
 
     if nb_persons_to_detect ==0:
         raise Exception('No persons have been triangulated. Please check your calibration and your synchronization, or the triangulation parameters in Config.toml.')
 
     # IDs of excluded cameras
-    # id_excluded_cams_tot = [np.concatenate([id_excluded_cams_tot[f][k] for f in range(frames_nb)]) for k in range(keypoints_nb)]
-    id_excluded_cams_tot = [np.hstack(np.hstack(np.array(id_excluded_cams_tot[n]))) for n in range(nb_persons_to_detect)]
-    cam_excluded_count = [dict(Counter(k)) for k in id_excluded_cams_tot]
-    [cam_excluded_count[n].update((x, y/frame_nb/keypoints_nb) for x, y in cam_excluded_count[n].items()) for n in range(nb_persons_to_detect)]
+    # Need to carefully flatten the id_excluded_cams_tot_df structure
+    cam_excluded_count = []
+    for n in range(nb_persons_to_detect):
+        # Flatten the list of lists of lists/arrays stored in the DataFrame column
+        all_excluded_ids_person = []
+        for frame_list in id_excluded_cams_tot_df[n].values.tolist(): # Iterate through rows (frames)
+            for kpt_list in frame_list: # Iterate through keypoints in a frame
+                # Check if kpt_list is iterable and not just nan
+                if hasattr(kpt_list, '__iter__'):
+                   all_excluded_ids_person.extend(kpt_list) # Add excluded cam IDs for this keypoint
+        # Remove potential NaNs introduced by filling/errors before counting
+        all_excluded_ids_person_cleaned = [int(id) for id in all_excluded_ids_person if not np.isnan(id)]
+        count_dict = dict(Counter(all_excluded_ids_person_cleaned))
+        # Normalize counts
+        total_counts = frame_nb * keypoints_nb
+        for cam_id in count_dict:
+            count_dict[cam_id] /= total_counts if total_counts > 0 else 1
+        cam_excluded_count.append(count_dict)
+
     
     # Optionally, for each person, for each keypoint, show indices of frames that should be interpolated
     if show_interp_indices:
@@ -827,8 +1462,9 @@ def triangulate_all(config_dict):
         interp_frames = [[[f'{seq[0]}:{seq[-1]}' for seq in seq_kpt if len(seq)<=interp_gap_smaller_than and len(seq)>0] for seq_kpt in sequences[n]] for n in range(nb_persons_to_detect)]
         non_interp_frames = [[[f'{seq[0]}:{seq[-1]}' for seq in seq_kpt if len(seq)>interp_gap_smaller_than] for seq_kpt in sequences[n]] for n in range(nb_persons_to_detect)]
     else:
-        interp_frames = None
-        non_interp_frames = []
+        interp_frames = [[[[] for _ in range(keypoints_nb)]] for _ in range(nb_persons_to_detect)] # Provide default structure
+        non_interp_frames = [[[[] for _ in range(keypoints_nb)]] for _ in range(nb_persons_to_detect)] # Provide default structure
+
 
     # Interpolate missing values
     if interpolation_kind != 'none':
@@ -850,7 +1486,7 @@ def triangulate_all(config_dict):
     if make_c3d:
         c3d_paths = [convert_to_c3d(t) for t in trc_paths]
         
-    # # Reorder TRC files
+    # # Reorder TRC files - This logic might need review if MAE tracking guarantees person order
     # if multi_person and reorder_trc and len(trc_paths)>1:
     #     trc_id = retrieve_right_trc_order(trc_paths)
     #     [os.rename(t, t+'.old') for t in trc_paths]
@@ -863,7 +1499,7 @@ def triangulate_all(config_dict):
     #     cam_excluded_count = [cam_excluded_count[i] for i in trc_id]
     #     interp_frames = [interp_frames[i] for i in trc_id]
     #     non_interp_frames = [non_interp_frames[i] for i in trc_id]
-        
+    #     
     #     logging.info('\nThe trc and c3d files have been renamed to match the order of the static sequences.')
 
 

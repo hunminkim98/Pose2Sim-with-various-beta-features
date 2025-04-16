@@ -52,6 +52,8 @@ import logging
 from Pose2Sim.common import sort_stringlist_by_last_number, bounding_boxes, interpolate_zeros_nans
 from Pose2Sim.skeletons import *
 
+from .Track_person import animate_pre_post_tracking
+
 
 ## AUTHORSHIP INFORMATION
 __author__ = "David Pagnon, HunMin Kim"
@@ -1020,6 +1022,7 @@ def select_person(vid_or_img_files, cam_names, json_files_names_range, search_ar
     
     try: # video files
         video_files_dict = {cam_name: file for cam_name in cam_names for file in vid_or_img_files if cam_name in os.path.basename(file)}
+        print(f'video_files_dict: {video_files_dict}')
     except: # image directories
         video_files_dict = {cam_name: files for cam_name in cam_names for files in vid_or_img_files if cam_name in os.path.basename(files[0])}
 
@@ -1150,67 +1153,278 @@ def load_frame_and_bounding_boxes(cap, frame_number, frame_to_json, pose_dir, js
     return frame_rgb, bounding_boxes_list
 
 
-def convert_json2pandas(json_files, likelihood_threshold=0.6, keypoints_ids=[], synchronization_gui=False, selected_id=None):
+def calculate_mae(keypoints1, keypoints2, likelihood_threshold=0.6):
+    """
+    Calculate the Mean Absolute Error (MAE) between two sets of keypoints.
+    Only considers valid points (non-zero coordinates and likelihood above threshold).
+
+    INPUTS:
+    - keypoints1: np.array (N, 3). Keypoints for the first person (x, y, likelihood).
+    - keypoints2: np.array (N, 3). Keypoints for the second person (x, y, likelihood).
+    - likelihood_threshold: float. Minimum confidence score for a keypoint to be considered valid.
+
+    OUTPUTS:
+    - mae: float. Mean Absolute Error between the valid keypoints. Returns infinity if no valid pairs found.
+    """
+    # Extract coordinates and likelihoods
+    coords1 = keypoints1[:, :2]
+    likes1 = keypoints1[:, 2]
+    coords2 = keypoints2[:, :2]
+    likes2 = keypoints2[:, 2]
+
+    # Identify valid points based on non-zero coordinates and likelihood threshold
+    valid1 = (np.all(coords1 != 0, axis=1)) & (likes1 > likelihood_threshold)
+    valid2 = (np.all(coords2 != 0, axis=1)) & (likes2 > likelihood_threshold)
+    
+    # Find common valid points
+    common_valid = valid1 & valid2
+    
+    if not np.any(common_valid):
+        return float('inf')  # No common valid keypoints to compare
+
+    # Calculate MAE only on common valid points
+    diff = np.abs(coords1[common_valid] - coords2[common_valid])
+    mae = np.mean(diff)
+    
+    return mae
+
+
+def convert_json2pandas(json_files, likelihood_threshold=0.3, keypoints_ids=[],
+                        synchronization_gui=False, selected_id=None, mae_threshold= 80,
+                        animation=True, mae_keypoint_indices=None): # Added mae_keypoint_indices
     '''
     Convert a list of JSON files to a pandas DataFrame.
-    Only takes one person in the JSON file.
+    If synchronization_gui is True, tracks the selected person using MAE.
+    Otherwise, uses the person with the largest bounding box (original behavior).
 
     INPUTS:
     - json_files: list of str. Paths of the the JSON files.
     - likelihood_threshold: float. Drop values if confidence is below likelihood_threshold.
-    - keypoints_ids: list of int. Indices of the keypoints to extract.
+    - keypoints_ids: list of int. Indices of the keypoints to extract (relative to the original model).
+    - synchronization_gui: bool. Flag indicating if the GUI was used for selection.
+    - selected_id: int or None. The index of the person selected in the GUI's first frame.
+    - mae_threshold: float. Maximum MAE allowed for tracking a person between frames.
+    - animation: bool. Whether to generate tracking animation.
+    - mae_keypoint_indices: list of int or None. Indices (within the 0-based index of people_kps rows, corresponding to keypoints_ids order) of keypoints to use for MAE calculation. If None or empty, use all.
+
 
     OUTPUTS:
     - df_json_coords: dataframe. Extracted coordinates in a pandas dataframe.
     '''
 
+    nb_keypoints_total = max(keypoints_ids) + 1 if keypoints_ids else 0 # Determine based on max id
     nb_coords = len(keypoints_ids)
-    json_coords = []
-    for j_p in json_files:
-        with open(j_p) as j_f:
-            try:
-                json_data_all = json.load(j_f)['people']
+    json_coords_list = []
+    
+    pre_tracking_data_list = [] # Store original 'people' data for animation
+    data_to_track_np = None # Holds the keypoints (N, 3) of the person being tracked from the previous frame
+    tracking_initialized = False
+    currently_tracked_person_id = None # 현재 추적 중인 사람의 ID 저장
 
-                # # previous approach takes person #0
-                # json_data = json_data_all[0]
-                # json_data = np.array([json_data['pose_keypoints_2d'][3*i:3*i+3] for i in keypoints_ids])
-                
-                # # approach based on largest mean confidence does not work if person in background is better detected
-                # p_conf = [np.mean(np.array([p['pose_keypoints_2d'][3*i:3*i+3] for i in keypoints_ids])[:, 2])
-                #         if 'pose_keypoints_2d' in p else 0
-                #         for p in json_data_all]
-                # max_confidence_person = json_data_all[np.argmax(p_conf)]
-                # json_data = np.array([max_confidence_person['pose_keypoints_2d'][3*i:3*i+3] for i in keypoints_ids])
-
-                # latest approach: uses person with largest bounding box
-                if not synchronization_gui:
-                    bbox_area = [
-                                (keypoints[:, 0].max() - keypoints[:, 0].min()) * (keypoints[:, 1].max() - keypoints[:, 1].min())
-                                if 'pose_keypoints_2d' in p else 0
-                                for p in json_data_all
-                                for keypoints in [np.array([p['pose_keypoints_2d'][3*i:3*i+3] for i in keypoints_ids])]
-                                ]
-                    max_area_person = json_data_all[np.argmax(bbox_area)]
-                    json_data = np.array([max_area_person['pose_keypoints_2d'][3*i:3*i+3] for i in keypoints_ids])
-
-                elif synchronization_gui:
-                    if selected_id is not None: # We can sfely assume that selected_id is always not greater than len(json_data_all) because padding with 0 was done in the previous step
-                        selected_person = json_data_all[selected_id]
-                        json_data = np.array([selected_person['pose_keypoints_2d'][3*i:3*i+3] for i in keypoints_ids])
-                    else:
+    if not synchronization_gui:
+        # --- Original Non-GUI Logic: Use largest bounding box ---
+        for j_p in json_files:
+            with open(j_p) as j_f:
+                try:
+                    json_data_all = json.load(j_f)['people']
+                    pre_tracking_data_list.append(json_data_all if json_data_all else []) # Store for animation
+                    if not json_data_all:
                         json_data = [np.nan] * nb_coords * 3
-                
-                # Remove points with low confidence
-                json_data = np.array([j if j[2]>likelihood_threshold else [np.nan, np.nan, np.nan] for j in json_data]).ravel().tolist() 
-            except:
-                # print(f'No person found in {os.path.basename(json_dir)}, frame {i}')
-                json_data = [np.nan] * nb_coords*3
-        json_coords.append(json_data)
-    df_json_coords = pd.DataFrame(json_coords)
+                    else:
+                        bbox_area = []
+                        valid_people_data = []
+                        for p in json_data_all:
+                            if 'pose_keypoints_2d' in p and len(p['pose_keypoints_2d']) >= nb_keypoints_total * 3:
+                                kps_all = np.array(p['pose_keypoints_2d']).reshape(-1, 3)
+                                kps_relevant = kps_all[keypoints_ids] # Select only relevant keypoints
+                                valid_kps = kps_relevant[(kps_relevant[:, 2] > likelihood_threshold) & np.all(kps_relevant[:, :2] != 0, axis=1)]
+                                if valid_kps.shape[0] >= 2: # Need at least 2 valid points for bbox
+                                    x_min, y_min = valid_kps[:, :2].min(axis=0)
+                                    x_max, y_max = valid_kps[:, :2].max(axis=0)
+                                    area = (x_max - x_min) * (y_max - y_min)
+                                    bbox_area.append(area)
+                                    valid_people_data.append(kps_relevant)
+                                else:
+                                    bbox_area.append(0)
+                                    valid_people_data.append(None) # Placeholder
+                            else:
+                                bbox_area.append(0)
+                                valid_people_data.append(None) # Placeholder
+
+                        if not bbox_area or max(bbox_area) == 0:
+                            json_data = [np.nan] * nb_coords * 3
+                        else:
+                            max_area_idx = np.argmax(bbox_area)
+                            json_data_np = valid_people_data[max_area_idx]
+                            # Apply likelihood threshold
+                            json_data_np = np.array([kp if kp[2] > likelihood_threshold else [np.nan, np.nan, np.nan] for kp in json_data_np])
+                            json_data = json_data_np.ravel().tolist()
+                except Exception as e:
+                    # logging.warning(f"Error processing {os.path.basename(j_p)} in non-GUI mode: {e}")
+                    json_data = [np.nan] * nb_coords * 3
+                    if not pre_tracking_data_list or len(pre_tracking_data_list) <= json_files.index(j_p): # Ensure list has place for this frame
+                        pre_tracking_data_list.append([]) # Add empty list if error occurred before storing
+            json_coords_list.append(json_data)
+
+    else:
+        # --- New GUI Logic: Track selected person using MAE ---
+        initial_selected_id = selected_id # Store the initially selected ID
+        print(f'initial_selected_id: {initial_selected_id}')
+        
+        for frame_idx, j_p in enumerate(json_files):
+            current_frame_tracked = False
+            frame_basename = os.path.basename(j_p)  # 파일 이름 추출
+            with open(j_p) as j_f:
+                try:
+                    json_data_all = json.load(j_f)['people']
+                    pre_tracking_data_list.append(json_data_all if json_data_all else []) # Store for animation
+                    
+                    if not json_data_all:
+                        # No people detected in this frame
+                        if tracking_initialized and currently_tracked_person_id is not None:
+                            logging.warning(f"프레임 {frame_idx} ({frame_basename}): 사람 ID {currently_tracked_person_id} 추적 손실. 프레임에서 사람이 감지되지 않음.")
+                        json_coords_list.append([np.nan] * nb_coords * 3)
+                        data_to_track_np = None # Lost track
+                        currently_tracked_person_id = None
+                        continue
+
+                    people_kps = [] # Store keypoints (N, 3) for all people in this frame
+                    people_indices = [] # Store original index of people
+                    for idx, p in enumerate(json_data_all):
+                         if 'pose_keypoints_2d' in p and len(p['pose_keypoints_2d']) >= nb_keypoints_total * 3:
+                             kps_person_all = np.array(p['pose_keypoints_2d']).reshape(-1, 3)
+                             # Ensure kps_person_all has enough keypoints before indexing
+                             if kps_person_all.shape[0] > max(keypoints_ids):
+                                 kps_person_relevant = kps_person_all[keypoints_ids]
+                                 people_kps.append(kps_person_relevant)
+                                 people_indices.append(idx)
+                             else:
+                                 logging.debug(f"Frame {frame_idx} ({frame_basename}): Person {idx} has insufficient keypoints ({kps_person_all.shape[0]}) required by keypoints_ids (max: {max(keypoints_ids)}). Skipping person.")
+                         # else: Person data is invalid or incomplete
+
+                    if not people_kps: # No valid people found after filtering
+                         if tracking_initialized and currently_tracked_person_id is not None:
+                             logging.warning(f"프레임 {frame_idx} ({frame_basename}): 사람 ID {currently_tracked_person_id} 추적 손실. 유효한 키포인트가 없음.")
+                         json_coords_list.append([np.nan] * nb_coords * 3)
+                         data_to_track_np = None # Lost track
+                         currently_tracked_person_id = None
+                         continue
+
+                    if not tracking_initialized:
+                        # Try to initialize tracking with the initially selected ID
+                        if initial_selected_id is not None and initial_selected_id in people_indices:
+                             selected_person_frame_idx = people_indices.index(initial_selected_id)
+                             data_to_track_np = people_kps[selected_person_frame_idx]
+                             # Apply likelihood threshold to the initial tracked data
+                             tracked_kps = np.array([kp if kp[2] > likelihood_threshold else [np.nan, np.nan, np.nan] for kp in data_to_track_np])
+                             json_coords_list.append(tracked_kps.ravel().tolist())
+                             tracking_initialized = True
+                             currently_tracked_person_id = initial_selected_id  # 추적 시작 시 ID 설정
+                             current_frame_tracked = True
+                             logging.info(f"프레임 {frame_idx} ({frame_basename}): 사람 ID {currently_tracked_person_id} 추적 시작.")
+                        # else: Cannot initialize yet, wait for a frame where the selected ID is present
+
+                    elif data_to_track_np is not None:
+                        # --- Perform MAE-based tracking ---
+                        mae_list = []
+                        for kps_candidate in people_kps:
+                             # Filter keypoints before calculating MAE if indices are provided
+                             if mae_keypoint_indices: # Check if list is not None and not empty
+                                # print(f"mae_keypoint_indices: {mae_keypoint_indices}")
+                                try:
+                                     # Ensure indices are within bounds for both arrays
+                                     if max(mae_keypoint_indices) < data_to_track_np.shape[0] and max(mae_keypoint_indices) < kps_candidate.shape[0]:
+                                         keypoints1_filtered = data_to_track_np[mae_keypoint_indices, :]
+                                         keypoints2_filtered = kps_candidate[mae_keypoint_indices, :]
+                                         # Ensure we still have points to compare after filtering
+                                         if keypoints1_filtered.shape[0] > 0 and keypoints2_filtered.shape[0] > 0:
+                                             mae = calculate_mae(keypoints1_filtered, keypoints2_filtered, likelihood_threshold)
+                                         else:
+                                             mae = float('inf') # Cannot compare if filtering removed all points
+                                     else:
+                                         logging.error(f"Frame {frame_idx} ({frame_basename}): MAE keypoint indices out of bounds. Using all keypoints.")
+                                         mae = calculate_mae(data_to_track_np, kps_candidate, likelihood_threshold)
+                                except IndexError:
+                                     logging.error(f"Frame {frame_idx} ({frame_basename}): IndexError during MAE keypoint filtering. Using all keypoints for this comparison.")
+                                     mae = calculate_mae(data_to_track_np, kps_candidate, likelihood_threshold)
+                             else: # Original behavior: use all extracted keypoints
+                                 mae = calculate_mae(data_to_track_np, kps_candidate, likelihood_threshold)
+                             mae_list.append(mae)
+
+                        # if not mae_list or min(mae_list) == float('inf'): # Original check
+                        if not mae_list or np.all(np.isinf(mae_list)): # Check if all comparisons resulted in inf
+                            # No valid comparisons possible
+                            if currently_tracked_person_id is not None:
+                                logging.warning(f"프레임 {frame_idx} ({frame_basename}): 사람 ID {currently_tracked_person_id} 추적 손실. 유효한 MAE 비교가 불가능.")
+                            data_to_track_np = None # Lost track
+                            currently_tracked_person_id = None
+                        else:
+                             # Find the index of the minimum *finite* MAE value
+                             finite_mae_indices = [idx for idx, m in enumerate(mae_list) if not np.isinf(m)]
+                             if not finite_mae_indices:
+                                 # All were infinite, handled above, but for safety:
+                                 logging.warning(f"프레임 {frame_idx} ({frame_basename}): 사람 ID {currently_tracked_person_id} 추적 손실. 모든 MAE 비교가 무한대.")
+                                 data_to_track_np = None
+                                 currently_tracked_person_id = None
+                             else:
+                                 min_finite_mae_local_idx = np.argmin([mae_list[i] for i in finite_mae_indices])
+                                 min_mae_idx = finite_mae_indices[min_finite_mae_local_idx] # Index in original people_kps/people_indices
+                                 min_mae = mae_list[min_mae_idx]
+                                 new_person_id = people_indices[min_mae_idx]  # 새로운 사람 ID
+
+                                 if min_mae <= mae_threshold:
+                                     # Found a match, update tracked data
+                                     if currently_tracked_person_id is not None and new_person_id != currently_tracked_person_id:
+                                         logging.warning(f"프레임 {frame_idx} ({frame_basename}): 추적 대상이 ID {currently_tracked_person_id}에서 ID {new_person_id}로 변경됨 (MAE: {min_mae:.2f}).")
+                                     
+                                     data_to_track_np = people_kps[min_mae_idx]
+                                     currently_tracked_person_id = new_person_id  # 추적 중인 ID 업데이트
+                                     # Apply likelihood threshold before saving
+                                     tracked_kps = np.array([kp if kp[2] > likelihood_threshold else [np.nan, np.nan, np.nan] for kp in data_to_track_np])
+                                     json_coords_list.append(tracked_kps.ravel().tolist())
+                                     current_frame_tracked = True
+                                 else:
+                                     # MAE too high, tracking lost
+                                     # Include the potential ID in the log message
+                                     logging.warning(f"프레임 {frame_idx} ({frame_basename}): 사람 ID {currently_tracked_person_id} 추적 손실. 최소 MAE ({min_mae:.2f} -> ID {new_person_id})가 임계값({mae_threshold:.2f})을 초과.")
+                                     data_to_track_np = None
+                                     currently_tracked_person_id = None
+                except Exception as e:
+                    logging.error(f"프레임 {frame_idx} ({frame_basename}) 처리 중 오류: {e}")
+                    if tracking_initialized and currently_tracked_person_id is not None:
+                        logging.warning(f"프레임 {frame_idx} ({frame_basename}): 오류로 인해 사람 ID {currently_tracked_person_id} 추적 손실.")
+                    data_to_track_np = None # Lost track
+                    currently_tracked_person_id = None
+                    if not pre_tracking_data_list or len(pre_tracking_data_list) <= frame_idx: # Ensure list has place for this frame
+                        pre_tracking_data_list.append([]) # Add empty list if error occurred before storing
+
+            # If tracking was not initialized or lost in this frame, append NaNs
+            if not current_frame_tracked:
+                 json_coords_list.append([np.nan] * nb_coords * 3)
+                 # Keep data_to_track_np as None until re-initialized or matched again
+
+    # --- Final DataFrame creation (common for both modes) ---
+    df_json_coords = pd.DataFrame(json_coords_list)
+
+    # Optional: Add animation call here if desired
+    if animation:
+        try:
+            post_tracking_data_np = np.array(json_coords_list)
+            folder_name = os.path.basename(os.path.dirname(json_files[0])) if json_files else "Unknown"
+            # Check if function exists and dependencies are met before calling
+            if 'animate_pre_post_tracking' in globals():
+                 animate_pre_post_tracking(pre_tracking_data_list, post_tracking_data_np, folder_name=folder_name)
+            else:
+                 logging.warning("Tracking animation function not found or dependencies missing.")
+        except ImportError:
+            logging.warning("Could not import animation dependencies (matplotlib, scipy). Skipping tracking animation.")
+        except Exception as e:
+            logging.warning(f"Could not generate tracking animation: {e}")
+
 
     if df_json_coords.isnull().all().all():
-        logging.error('No valid coordinates found in the JSON files. There may be a mismatch between the "pose_model" specified for pose estimation and for synchronization. If not, make sure that your likelihood_threshold for synchronization is not set too high.')
-        raise ValueError('No valid coordinates found in the JSON files. There may be a mismatch between the "pose_model" specified for pose estimation and for synchronization. If not, make sure that your likelihood_threshold for synchronization is not set too high.')
+        logging.error('No valid coordinates found after processing/tracking. Check JSON files, selected person, likelihood threshold, and MAE threshold.')
+        raise ValueError('No valid coordinates found after processing/tracking.')
 
     return df_json_coords
 
@@ -1347,6 +1561,8 @@ def synchronize_cams_all(config_dict):
     filter_cutoff = int(config_dict.get('synchronization').get('filter_cutoff'))
     filter_order = int(config_dict.get('synchronization').get('filter_order'))
 
+    display_tracking_animation = config_dict.get('synchronization').get('display_tracking_animation')
+
     # Determine frame rate
     video_dir = os.path.join(project_dir, 'videos')
     vid_img_extension = config_dict['pose']['vid_img_extension']
@@ -1402,7 +1618,21 @@ def synchronize_cams_all(config_dict):
     nb_frames_per_cam = [len(fnmatch.filter(os.listdir(os.path.join(json_dir)), '*.json')) for json_dir in json_dirs]
     cam_nb = len(json_dirs)
     cam_list = list(range(cam_nb))
-    cam_names = [os.path.basename(j_dir).split('_')[0] for j_dir in json_dirs]
+    cam_names = []
+    for j_dir in json_dirs:
+        base_name = os.path.basename(j_dir)
+        parts = base_name.split('_')
+        cam_name_found = None
+        for part in parts:
+            if re.match(r'cam\d+', part):
+                cam_name_found = part
+                break
+        if cam_name_found:
+            cam_names.append(cam_name_found)
+        else:
+            # Fallback to original logic if 'cam<number>' pattern not found
+            cam_names.append(parts[0]) 
+            logging.warning(f"Could not find a camera name matching 'cam<number>' in '{base_name}'. Using '{parts[0]}' as camera name.")
     
     # frame range selection
     f_range = [[0, min([len(j) for j in json_files_names])] if frame_range==[] else frame_range][0]
@@ -1463,15 +1693,27 @@ def synchronize_cams_all(config_dict):
         raise ValueError(f'No json files found within the specified frame range ({frame_range}) at the times {approx_time_maxspeed} +/- {time_range_around_maxspeed} s.')
     
     json_files_range = [[os.path.join(pose_dir, j_dir, j_file) for j_file in json_files_names_range[j]] for j, j_dir in enumerate(json_dirs_names)]
+    
+    # Initial calculation based on config (might be overwritten by GUI)
     kpt_indices = [i for i,k in zip(keypoints_ids, keypoints_names) if k in keypoints_to_consider]
     kpt_id_in_df = np.array([[keypoints_ids.index(k)*2,keypoints_ids.index(k)*2+1]  for k in kpt_indices]).ravel()
     
+    # Define model_nodes here, needed later
+    model_nodes = {node.id: node for _, _, node in RenderTree(model) if node.id is not None}
+
     # Handle manual selection if synchronization_gui is True
+    # This call might update keypoints_to_consider
     if synchronization_gui:
+        # Initial keypoints_names needed for the UI
+        initial_keypoints_names_for_ui = [node.name for _, _, node in RenderTree(model) if node.id is not None]
         selected_id_list, keypoints_to_consider, approx_time_maxspeed, time_RAM_list = select_person(
             vid_or_img_files, cam_names, json_files_names_range, search_around_frames, 
-            pose_dir, json_dirs_names, keypoints_names, keypoints_to_consider, time_range_around_maxspeed, fps)
+            pose_dir, json_dirs_names, initial_keypoints_names_for_ui, keypoints_to_consider, time_range_around_maxspeed, fps)
         
+        # Update kpt_indices and kpt_id_in_df based on GUI selection
+        kpt_indices = [i for i, k in zip(keypoints_ids, keypoints_names) if k in keypoints_to_consider]
+        kpt_id_in_df = np.array([[keypoints_ids.index(k)*2,keypoints_ids.index(k)*2+1] for k in kpt_indices]).ravel()
+
         # Calculate lag_ranges using time_RAM_list
         lag_ranges = [int(dt * fps) for dt in time_RAM_list]
         
@@ -1491,22 +1733,53 @@ def synchronize_cams_all(config_dict):
     else:
         selected_id_list = [None] * cam_nb
 
+    # ---- Calculate MAE indices AFTER potential GUI update ----
+    # Calculate the indices within the keypoints_ids list (and thus within people_kps rows)
+    # that correspond to the FINAL keypoints_to_consider for MAE calculation.
+    mae_kpt_indices_in_people_kps = [
+        idx for idx, kpt_id in enumerate(keypoints_ids)
+        if model_nodes.get(kpt_id) and model_nodes[kpt_id].name in keypoints_to_consider
+    ]
+    if not mae_kpt_indices_in_people_kps and isinstance(keypoints_to_consider, list): # Check if it was a specific list
+         logging.warning(f"Could not find any specified 'keypoints_to_consider' ({keypoints_to_consider}) within the extracted 'keypoints_ids'. MAE tracking will use all extracted keypoints.")
+         mae_kpt_indices_in_people_kps = None # Ensure it's None to trigger default behavior
+    # ---------------------------------------------------------
+
     padlen = 3 * (max(len(a), len(b)) - 1)
-    
+
     for i in range(cam_nb):
-        df_coords.append(convert_json2pandas(json_files_range[i], likelihood_threshold=likelihood_threshold, keypoints_ids=keypoints_ids, synchronization_gui=synchronization_gui, selected_id=selected_id_list[i]))
-        df_coords[i] = drop_col(df_coords[i],3) # drop likelihood
-        df_coords[i] = df_coords[i][kpt_id_in_df]
+        # Pass the calculated indices and other params to convert_json2pandas
+        df_coords.append(convert_json2pandas(
+            json_files_range[i],
+            likelihood_threshold=likelihood_threshold,
+            keypoints_ids=keypoints_ids,
+            synchronization_gui=synchronization_gui,
+            selected_id=selected_id_list[i],
+            mae_threshold=300, # Pass mae_threshold from config
+            animation=display_tracking_animation, # Pass animation flag from config if needed, currently hardcoded in definition
+            mae_keypoint_indices=mae_kpt_indices_in_people_kps # NEW ARGUMENT
+            ))
+        # Filter DataFrame columns based on FINAL keypoints_to_consider
+        if kpt_id_in_df.size > 0: # Check if any keypoints are left after potential GUI update
+            df_coords[i] = drop_col(df_coords[i],3) # drop likelihood
+            df_coords[i] = df_coords[i][kpt_id_in_df]
+        else:
+            logging.error(f"Camera {i}: No keypoints selected or found based on 'keypoints_to_consider'. Cannot proceed with synchronization for this camera.")
+            # Handle this case, e.g., skip camera or raise error
+            # For now, let's create an empty DataFrame to avoid crashing later, but sync will fail.
+            df_coords[i] = pd.DataFrame()
+            continue # Skip filtering and processing for this camera if no keypoints
+
         df_coords[i] = df_coords[i].apply(interpolate_zeros_nans, axis=0, args=['linear'])
         df_coords[i] = df_coords[i].bfill().ffill()
         if df_coords[i].shape[0] > padlen:
             df_coords[i] = pd.DataFrame(signal.filtfilt(b, a, df_coords[i], axis=0))
-        else:
+        elif df_coords[i].shape[0] > 0: # Only warn if there was data to filter
             logging.warning(
                 f"Camera {i}: insufficient number of samples ({df_coords[i].shape[0]} < {padlen + 1}) to apply the Butterworth filter. "
                 "Data will remain unfiltered."
             )
-    
+
     # Compute sum of speeds
     df_speed = []
     sum_speeds = []
